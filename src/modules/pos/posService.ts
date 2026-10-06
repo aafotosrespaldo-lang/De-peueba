@@ -318,6 +318,69 @@ export class PosService {
   }
 
   /**
+   * Create a canonical Order origin from DirectPost (order_type = 'pos').
+   * Can be created at counter, bar, or takeout without requiring an active TableSession.
+   */
+  public static createDirectPostOrder(dto: {
+    restaurant_id?: string;
+    server_id?: string;
+    customer_id?: string;
+    notes?: string;
+    ticket_number?: string;
+    table_id?: string;
+    table_session_id?: string;
+  }): Order {
+    const restaurant_id = dto.restaurant_id || DEFAULT_RESTAURANT_ID;
+    const now = new Date().toISOString();
+    const existingPosOrders = db.get('orders').filter((o) => o.restaurant_id === restaurant_id && o.order_type === 'pos');
+    const ticketNumber = dto.ticket_number || `POS #${String(existingPosOrders.length + 1).padStart(3, '0')}`;
+    const orderId = this.generateId('ord_pos');
+
+    const order: Order = {
+      id: orderId,
+      restaurant_id,
+      ticket_number: ticketNumber,
+      order_type: 'pos',
+      status: 'open',
+      subtotal_cents: 0,
+      tax_cents: 0,
+      total_cents: 0,
+      server_id: dto.server_id || 'Cajero POS',
+      customer_id: dto.customer_id,
+      table_id: dto.table_id,
+      table_session_id: dto.table_session_id,
+      notes: dto.notes,
+      created_at: now,
+      updated_at: now,
+    };
+
+    db.get('orders').push(order);
+    db.save();
+
+    AuditService.log(
+      'order_created',
+      'order',
+      order.id,
+      dto.server_id || 'Cajero POS',
+      null,
+      order,
+      `Venta DirectPost ${ticketNumber} iniciada en Core.`,
+      restaurant_id
+    );
+
+    eventBus.publish('ORDER_STATUS_CHANGED', restaurant_id, dto.server_id || 'Cajero POS', {
+      order_id: order.id,
+      ticket_number: order.ticket_number,
+      order_type: 'pos',
+      previous_status: null,
+      new_status: 'open',
+      timestamp: now,
+    });
+
+    return order;
+  }
+
+  /**
    * Add a guest subaccount to an active TableSession.
    * Enforces unique constraint: table_session_id + seat_number.
    */
@@ -1088,5 +1151,107 @@ export class PosService {
     order.subtotal_cents = subtotal;
     order.tax_cents = tax;
     order.total_cents = subtotal + tax;
+  }
+
+  /**
+   * Universal Order State Machine Transition Engine
+   * Validates state flow for dine_in, delivery, takeout, catering, and pos orders.
+   */
+  public static updateOrderStatus(
+    order_id: string,
+    new_status: any,
+    actor: string = 'Sistema / Operador',
+    reason?: string,
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): Order {
+    const orders = db.get('orders');
+    const order = orders.find((o) => o.id === order_id && o.restaurant_id === restaurant_id);
+    if (!order) {
+      throw new Error(`Orden ${order_id} no encontrada en este restaurante.`);
+    }
+
+    const prevStatus = order.status;
+    if (prevStatus === new_status) {
+      return order;
+    }
+
+    const validOrderTransitions: Record<string, string[]> = {
+      open: ['confirmed', 'preparing', 'cancelled'],
+      confirmed: ['preparing', 'cancelled'],
+      preparing: ['ready', 'cancelled'],
+      ready: ['assigned', 'out_for_delivery', 'delivered', 'completed', 'cancelled'],
+      assigned: ['out_for_delivery', 'ready', 'cancelled'],
+      out_for_delivery: ['delivered', 'cancelled'],
+      delivered: ['completed', 'cancelled'],
+      completed: [],
+      cancelled: [],
+    };
+
+    if (!validOrderTransitions[prevStatus]?.includes(new_status)) {
+      throw new Error(
+        `Transición de orden inválida: no se permite cambiar de "${prevStatus}" a "${new_status}".`
+      );
+    }
+
+    const now = new Date().toISOString();
+    order.status = new_status;
+    order.updated_at = now;
+
+    if (new_status === 'completed') {
+      order.closed_at = now;
+    }
+    if (new_status === 'delivered') {
+      order.delivered_at = now;
+    }
+    if (new_status === 'cancelled') {
+      order.cancellation_reason = reason;
+      order.closed_at = now;
+    }
+
+    db.save();
+
+    AuditService.log(
+      'order_status_changed',
+      'order',
+      order.id,
+      actor,
+      { status: prevStatus },
+      { status: new_status },
+      reason || `Estado de orden actualizado a ${new_status}.`,
+      restaurant_id
+    );
+
+    eventBus.publish('ORDER_STATUS_CHANGED', restaurant_id, actor, {
+      order_id: order.id,
+      ticket_number: order.ticket_number,
+      order_type: order.order_type,
+      previous_status: prevStatus,
+      new_status,
+      reason,
+      timestamp: now,
+    });
+
+    if (new_status === 'cancelled') {
+      eventBus.publish('ORDER_CANCELLED', restaurant_id, actor, {
+        order_id: order.id,
+        ticket_number: order.ticket_number,
+        reason,
+        timestamp: now,
+      });
+    }
+
+    return order;
+  }
+
+  /**
+   * Cancel an entire order / ticket cleanly
+   */
+  public static cancelOrder(
+    order_id: string,
+    reason: string = 'Cancelado por usuario / operador',
+    actor: string = 'Operador',
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): Order {
+    return this.updateOrderStatus(order_id, 'cancelled', actor, reason, restaurant_id);
   }
 }

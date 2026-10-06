@@ -154,16 +154,21 @@ export const CrmView: React.FC<CrmViewProps> = ({ initialTab = 'customers', onBa
 
   const loadCustomerDetails = async (customerId: string) => {
     try {
-      const [orders, account, txs] = await Promise.all([
+      const [ordersRes, accountRes, txsRes] = await Promise.allSettled([
         sdk.customers.getOrders(customerId),
         sdk.loyalty.getAccount(customerId),
         sdk.loyalty.getTransactions(customerId),
       ]);
-      setCustomerOrders(orders);
-      setLoyaltyAccount(account);
-      setLoyaltyTransactions(txs);
+      setCustomerOrders(ordersRes.status === 'fulfilled' ? ordersRes.value : []);
+      if (accountRes.status === 'fulfilled') {
+        setLoyaltyAccount(accountRes.value);
+      }
+      setLoyaltyTransactions(txsRes.status === 'fulfilled' ? txsRes.value : []);
+      if (ordersRes.status === 'rejected') {
+        console.warn('Notice loading customer orders:', ordersRes.reason);
+      }
     } catch (err) {
-      console.error('Error loading customer details:', err);
+      console.warn('Notice loading customer details:', err);
     }
   };
 
@@ -717,9 +722,9 @@ export const CrmView: React.FC<CrmViewProps> = ({ initialTab = 'customers', onBa
                         <p className="text-xs text-zinc-400">No hay comandas registradas aún.</p>
                       ) : (
                         <div className="space-y-2">
-                          {customerOrders.map((ord) => (
+                          {customerOrders.map((ord, idx) => (
                             <div
-                              key={ord.id}
+                              key={`${ord.id}_${idx}`}
                               className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between text-xs"
                             >
                               <div>
@@ -756,9 +761,9 @@ export const CrmView: React.FC<CrmViewProps> = ({ initialTab = 'customers', onBa
                         <p className="text-xs text-zinc-400">Sin movimientos de puntos aún.</p>
                       ) : (
                         <div className="space-y-2">
-                          {loyaltyTransactions.map((tx) => (
+                          {loyaltyTransactions.map((tx, idx) => (
                             <div
-                              key={tx.id}
+                              key={`${tx.id}_${idx}`}
                               className="p-3 bg-white border border-zinc-200 rounded-xl flex items-center justify-between text-xs"
                             >
                               <div>

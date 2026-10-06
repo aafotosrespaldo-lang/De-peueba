@@ -279,7 +279,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <div className="flex items-center gap-2">
                     <Printer className="w-4 h-4" />
-                    <span>DirectPrint ESC/POS</span>
+                    <span>Impresión y Tickets</span>
                   </div>
                 </button>
               </div>

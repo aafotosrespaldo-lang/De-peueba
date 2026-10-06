@@ -70,6 +70,8 @@ import {
   FinancialMovementType,
   RestaurantSettlement,
   DriverSettlement,
+  DriverProfile,
+  DeliveryDispatch,
   OperatingPnL,
   ZCutReport,
   PaymentMethod,
@@ -83,6 +85,8 @@ import {
   SolutionStatus,
   CommercialAvailability,
   EntitlementSource,
+  Printer,
+  PrintJob,
 } from '../core/types';
 import type {
   RecordPaymentInput,
@@ -194,6 +198,17 @@ export interface OrdersSdk {
     notes?: string,
     restaurantId?: string
   ): Promise<Order>;
+  createPosOrder(
+    data: {
+      server_id?: string;
+      customer_id?: string;
+      notes?: string;
+      ticket_number?: string;
+      table_id?: string;
+      table_session_id?: string;
+    },
+    restaurantId?: string
+  ): Promise<Order>;
   getSessionOrders(tableIdOrSessionId: string, restaurantId?: string): Promise<Order[]>;
   addOrderItem(
     tableIdOrSessionId: string,
@@ -211,6 +226,15 @@ export interface OrdersSdk {
     allergy_warning?: boolean;
     conflicts?: any[];
   }>;
+  getOrder(orderId: string, restaurantId?: string): Promise<Order & { items: OrderItem[] }>;
+  updateOrderStatus(
+    orderId: string,
+    status: Order['status'],
+    actor?: string,
+    reason?: string,
+    restaurantId?: string
+  ): Promise<Order>;
+  cancelOrder(orderId: string, reason?: string, actor?: string, restaurantId?: string): Promise<Order>;
   updateOrderItem(
     itemId: string,
     updates: Partial<OrderItem>,
@@ -562,6 +586,74 @@ export interface SolutionsSdk {
   ): Promise<ActionAuthorizationResult>;
 }
 
+export interface DeliverySdk {
+  listDrivers(
+    restaurantId?: string,
+    filters?: { status?: DriverProfile['status']; is_verified?: boolean }
+  ): Promise<DriverProfile[]>;
+  getDriver(driverId: string, restaurantId?: string): Promise<DriverProfile | null>;
+  createDriver(
+    data: {
+      name: string;
+      phone: string;
+      email?: string;
+      vehicle_type: DriverProfile['vehicle_type'];
+      license_plate?: string;
+      is_verified?: boolean;
+    },
+    actor?: string,
+    restaurantId?: string
+  ): Promise<DriverProfile>;
+  verifyDriver(driverId: string, isVerified: boolean, actor?: string, restaurantId?: string): Promise<DriverProfile>;
+  updateDriverGps(driverId: string, gps: { latitude: number; longitude: number }, restaurantId?: string): Promise<DriverProfile>;
+  findEligibleDrivers(restaurantId?: string, maxGpsAgeMinutes?: number): Promise<DriverProfile[]>;
+  dispatchOrder(data: {
+    order_id: string;
+    delivery_address: string;
+    delivery_fee_cents?: number;
+    cash_to_collect_cents?: number;
+    driver_id?: string;
+    offer_timeout_seconds?: number;
+    actor?: string;
+    restaurant_id?: string;
+  }): Promise<DeliveryDispatch>;
+  markDelivered(dispatchId: string, actor?: string, restaurantId?: string): Promise<DeliveryDispatch>;
+  listDispatches(
+    restaurantId?: string,
+    filters?: { status?: DeliveryDispatch['status']; driver_id?: string; order_id?: string }
+  ): Promise<DeliveryDispatch[]>;
+}
+
+export interface PrintSdk {
+  listPrintJobs(
+    restaurantId?: string,
+    filters?: { status?: string; printer_id?: string; station?: string }
+  ): Promise<PrintJob[]>;
+  createPrintJob(
+    params: {
+      type: PrintJob['type'];
+      station: string;
+      printer_id?: string;
+      order_id?: string;
+      table_id?: string;
+      table_number?: string;
+      formatted_content: string;
+      escpos_hex?: string;
+      paper_width?: 58 | 80;
+      status?: PrintJob['status'];
+      actor?: string;
+    },
+    restaurantId?: string
+  ): Promise<PrintJob>;
+  updatePrintJobStatus(
+    jobId: string,
+    status: PrintJob['status'],
+    errorMessage?: string,
+    restaurantId?: string
+  ): Promise<PrintJob>;
+  listPrinters(restaurantId?: string): Promise<Printer[]>;
+}
+
 export interface IDirectauranteSDK {
   tables: TablesSdk;
   guests: GuestsSdk;
@@ -589,6 +681,8 @@ export interface IDirectauranteSDK {
   promotions: PromotionsSdk;
   crm: CrmSdk;
   solutions: SolutionsSdk;
+  delivery: DeliverySdk;
+  print: PrintSdk;
   getContext(userId: string, restaurantId?: string): Promise<CurrentRestaurantContext>;
 }
 

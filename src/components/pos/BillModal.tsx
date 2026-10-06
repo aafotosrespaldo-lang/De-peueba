@@ -398,7 +398,7 @@ export const BillModal: React.FC<BillModalProps> = ({ isOpen, onClose, onPrintTi
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-zinc-200 hover:bg-zinc-100 text-[#101828] text-xs font-bold transition shadow-xs cursor-pointer"
           >
             <Printer className="w-4 h-4 text-[#05268F]" />
-            <span>Imprimir Pre-Cuenta ESC/POS</span>
+            <span>Imprimir cuenta</span>
           </button>
           <div className="flex items-center gap-2">
             {activeTab === 'global' ? (

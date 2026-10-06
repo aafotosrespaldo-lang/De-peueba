@@ -40,7 +40,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       case 'cash':
         return { section: 'Operación', title: 'Caja y Turnos' };
       case 'print':
-        return { section: 'Operación', title: 'DirectPrint ESC/POS' };
+        return { section: 'Operación', title: 'Impresión y Tickets' };
       case 'inventory':
         return { section: 'Administración', title: 'Inventario y Stock' };
       case 'recipes':

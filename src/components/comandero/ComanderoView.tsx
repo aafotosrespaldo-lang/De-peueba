@@ -14,6 +14,8 @@ import {
   User,
   ShieldAlert,
   ChevronRight,
+  Printer,
+  FileText,
 } from 'lucide-react';
 
 interface StagedItem {
@@ -39,6 +41,7 @@ export const ComanderoView: React.FC = () => {
     markItemDelivered,
     readyNotifications,
     dismissReadyNotification,
+    sdk,
   } = usePos();
 
   // Comandero Local State
@@ -47,6 +50,8 @@ export const ComanderoView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterMyTables, setFilterMyTables] = useState<boolean>(false);
   const [currentWaiterName] = useState<string>('Carlos R. (Mesero)');
+  const [isPrintingBill, setIsPrintingBill] = useState<boolean>(false);
+  const [printFeedback, setPrintFeedback] = useState<string | null>(null);
 
   // Staging Comanda (items ready to be sent to production in a single tap)
   const [stagedItems, setStagedItems] = useState<StagedItem[]>([]);
@@ -229,6 +234,70 @@ export const ComanderoView: React.FC = () => {
       alert(`Error al enviar comanda: ${err.message}`);
     } finally {
       setIsSendingComanda(false);
+    }
+  };
+
+  // Imprimir cuenta directamente en el Core como PrintJob
+  const handlePrintBill = async () => {
+    if (!selectedTableId || !currentTable) return;
+    setIsPrintingBill(true);
+    setPrintFeedback(null);
+    try {
+      const items = selectedTableDetails?.items || [];
+      const now = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+      const separator = '========================================';
+      const thinSep = '----------------------------------------';
+
+      const lines = [
+        separator,
+        '          DIRECTAURANTE          ',
+        '       PRE-CUENTA DE CONSUMO     ',
+        separator,
+        `MESA:   ${currentTable.number.padEnd(16)} HORA: ${now}`,
+        `MESERO: ${currentWaiterName}`,
+        thinSep,
+        'CANT  DESCRIPCIÓN                    TOTAL',
+        thinSep,
+      ];
+
+      let subtotalCents = 0;
+      items.forEach((item) => {
+        const itemTotal = item.unit_price_cents * item.quantity;
+        subtotalCents += itemTotal;
+        const qty = `${item.quantity}x`.padEnd(5);
+        const name = item.product_name.slice(0, 22).padEnd(23);
+        const price = `$${(itemTotal / 100).toFixed(2)}`.padStart(10);
+        lines.push(`${qty} ${name} ${price}`);
+      });
+
+      const taxCents = Math.round(subtotalCents * 0.16);
+      const totalCents = subtotalCents + taxCents;
+
+      lines.push(thinSep);
+      lines.push(`SUBTOTAL:`.padEnd(28) + `$${(subtotalCents / 100).toFixed(2)}`.padStart(12));
+      lines.push(`IVA TRASLADADO (16%):`.padEnd(28) + `$${(taxCents / 100).toFixed(2)}`.padStart(12));
+      lines.push(separator);
+      lines.push(`TOTAL A PAGAR:`.padEnd(28) + `$${(totalCents / 100).toFixed(2)} MXN`.padStart(12));
+      lines.push(separator);
+      lines.push('  NO ES COMPROBANTE FISCAL  ');
+      lines.push('       GRACIAS POR SU VISITA       \n\n\n');
+
+      await sdk.print.createPrintJob({
+        type: 'cashier',
+        station: 'cashier',
+        table_id: currentTable.id,
+        table_number: currentTable.number,
+        order_id: activeSession?.id,
+        formatted_content: lines.join('\n'),
+        status: 'pending',
+      });
+
+      setPrintFeedback('¡Cuenta enviada a la impresora de caja!');
+      setTimeout(() => setPrintFeedback(null), 3500);
+    } catch (err: any) {
+      setPrintFeedback(`Error al imprimir cuenta: ${err.message}`);
+    } finally {
+      setIsPrintingBill(false);
     }
   };
 
@@ -452,16 +521,35 @@ export const ComanderoView: React.FC = () => {
                 </span>
               </div>
 
-              {/* Quick Table Total */}
-              <div className="text-right">
-                <span className="text-[10px] uppercase font-bold text-[#667085] tracking-wider">
-                  Total Acumulado
-                </span>
-                <div className="text-base font-black text-[#101828] leading-none">
-                  ${(((currentTable?.total_cents || 0) + stagedTotalCents) / 100).toFixed(2)} MXN
+              {/* Quick Table Total & Imprimir Cuenta Button */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handlePrintBill}
+                  disabled={isPrintingBill || (currentTable?.total_cents || 0) === 0}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#05268F] hover:bg-[#041E72] disabled:opacity-40 text-white text-xs font-black transition shadow-xs cursor-pointer"
+                  title="Solicitar impresión de cuenta en caja"
+                >
+                  <Printer className="w-3.5 h-3.5 text-[#FFD318]" />
+                  <span>{isPrintingBill ? 'Imprimiendo...' : 'Imprimir cuenta'}</span>
+                </button>
+
+                <div className="text-right">
+                  <span className="text-[10px] uppercase font-bold text-[#667085] tracking-wider">
+                    Total Acumulado
+                  </span>
+                  <div className="text-base font-black text-[#101828] leading-none">
+                    ${(((currentTable?.total_cents || 0) + stagedTotalCents) / 100).toFixed(2)} MXN
+                  </div>
                 </div>
               </div>
             </div>
+
+            {printFeedback && (
+              <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>{printFeedback}</span>
+              </div>
+            )}
 
             {/* SELECTION OF DINER: [ 1.1 Carlos ] [ 1.2 Ana ] ... */}
             <div className="bg-[#05268F] rounded-2xl p-3 shadow-md">

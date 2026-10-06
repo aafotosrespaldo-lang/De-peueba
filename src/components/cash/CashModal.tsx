@@ -20,6 +20,11 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
   const [initialFloatInput, setInitialFloatInput] = useState('2000.00');
   const [closingCountInput, setClosingCountInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [closedResult, setClosedResult] = useState<{
+    expected: number;
+    counted: number;
+    difference: number;
+  } | null>(null);
 
   if (!isOpen) return null;
 
@@ -50,6 +55,7 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
     setIsSubmitting(true);
     try {
       await openCashShift(Math.round(amountNum * 100), 'Apertura de turno operativo');
+      setClosedResult(null);
     } catch (err: any) {
       alert(err.message || 'Error al abrir caja');
     } finally {
@@ -61,10 +67,17 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
     e.preventDefault();
     const countNum = parseFloat(closingCountInput);
     if (isNaN(countNum) || countNum < 0) return;
-    if (!confirm('¿Confirma el cierre y arqueo definitivo de la caja?')) return;
     setIsSubmitting(true);
     try {
-      await closeCashShift(Math.round(countNum * 100), 'Arqueo ciego de cajero');
+      const countedCents = Math.round(countNum * 100);
+      await closeCashShift(countedCents, 'Cierre de turno');
+      const expectedCents = totals.net_cash_cents;
+      const diffCents = countedCents - expectedCents;
+      setClosedResult({
+        expected: expectedCents / 100,
+        counted: countNum,
+        difference: diffCents / 100,
+      });
       setClosingCountInput('');
     } catch (err: any) {
       alert(err.message || 'Error al cerrar caja');
@@ -84,10 +97,10 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
             </div>
             <div>
               <h3 className="text-xl font-black text-[#101828] tracking-tight">
-                Control de Caja y Turnos Operativos
+                Control de Caja y Turnos
               </h3>
               <p className="text-xs text-[#667085]">
-                Arquitectura de caja preparada: movimientos, ventas en efectivo y arqueos auditados.
+                Registro de movimientos, cobros en efectivo y cierre de turno.
               </p>
             </div>
           </div>
@@ -98,6 +111,26 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
 
         {/* Content */}
         <div className="p-5 overflow-y-auto flex-1 space-y-5">
+          {closedResult && (
+            <div className={`p-4 rounded-2xl border ${closedResult.difference === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-950' : 'bg-amber-50 border-amber-200 text-amber-950'}`}>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-black text-sm uppercase tracking-wide">
+                  {closedResult.difference === 0 ? 'Caja cuadrada' : 'Diferencia de caja'}
+                </span>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-white/80 text-zinc-700">Turno cerrado</span>
+              </div>
+              {closedResult.difference === 0 ? (
+                <p className="text-xs">El efectivo contado coincide con el esperado.</p>
+              ) : (
+                <div className="text-xs space-y-1">
+                  <p>Efectivo esperado: ${closedResult.expected.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  <p>Efectivo contado: ${closedResult.counted.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  <p className="font-bold">Diferencia: {closedResult.difference > 0 ? '+' : ''}${closedResult.difference.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {!shift ? (
             /* Caja Cerrada: Formulario de Apertura */
             <div className="bg-[#F4F6F8] rounded-2xl p-6 border border-zinc-200 text-center max-w-md mx-auto my-6">
@@ -106,7 +139,7 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
               </div>
               <h4 className="text-lg font-black text-[#101828] mb-1">Caja Actualmente Cerrada</h4>
               <p className="text-xs text-[#667085] mb-4">
-                Abra un nuevo turno operativo indicando el fondo inicial en efectivo para cambio.
+                Abra un nuevo turno indicando el fondo inicial en efectivo para cambio.
               </p>
               <form onSubmit={handleOpenShift} className="space-y-3">
                 <div>
@@ -224,23 +257,27 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
                 </div>
 
                 {/* Close shift form */}
-                <div className="bg-[#F4F6F8] rounded-2xl p-4 border border-zinc-200">
-                  <h4 className="text-xs font-black text-[#101828] uppercase tracking-wider mb-2">
-                    Cierre y Arqueo Ciego de Caja
-                  </h4>
-                  <p className="text-[11px] text-[#667085] mb-2">
-                    El cajero ingresa el conteo físico real. El backend determina si la caja está cuadrada o
-                    presenta diferencia.
-                  </p>
+                <div className="bg-[#F4F6F8] rounded-2xl p-4 border border-zinc-200 flex flex-col justify-between">
+                  <div>
+                    <h4 className="text-xs font-black text-[#101828] uppercase tracking-wider mb-2">
+                      Cerrar Turno
+                    </h4>
+                    <div className="mb-3 p-2.5 rounded-xl bg-white border border-zinc-200">
+                      <div className="text-[10px] uppercase font-bold text-[#667085]">Efectivo esperado</div>
+                      <div className="text-base font-black text-[#05268F]">
+                        ${(totals.net_cash_cents / 100).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN
+                      </div>
+                    </div>
+                  </div>
                   <form onSubmit={handleCloseShift} className="space-y-2.5">
                     <div>
                       <label className="block text-[10px] font-bold text-[#667085] uppercase mb-0.5">
-                        Conteo Físico Real ($ MXN)
+                        Efectivo contado ($ MXN)
                       </label>
                       <input
                         type="number"
                         step="0.01"
-                        placeholder={`Sugerido: $${(totals.net_cash_cents / 100).toFixed(2)}`}
+                        placeholder="0.00"
                         value={closingCountInput}
                         onChange={(e) => setClosingCountInput(e.target.value)}
                         className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs font-bold text-[#101828] bg-white"
@@ -252,7 +289,7 @@ export const CashModal: React.FC<CashModalProps> = ({ isOpen, onClose }) => {
                       disabled={isSubmitting}
                       className="w-full py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition shadow-xs cursor-pointer"
                     >
-                      Realizar Cierre de Turno
+                      {isSubmitting ? 'Cerrando turno...' : 'Cerrar Turno'}
                     </button>
                   </form>
                 </div>

@@ -33,15 +33,19 @@ import {
   ReportsSdk,
   SettlementsSdk,
   SolutionsSdk,
+  DeliverySdk,
+  PrintSdk,
 } from './types';
 import {
   DEFAULT_RESTAURANT_ID,
+  Order,
   Payment,
   OrderItemStatus,
   CashMovement,
   CurrentRestaurantContext,
   Permission,
   EntitlementSource,
+  PrintJob,
 } from '../core/types';
 import type {
   RecordPaymentInput,
@@ -154,8 +158,26 @@ export class DirectauranteSDK implements IDirectauranteSDK {
           restaurantId || this.defaultRestaurantId
         );
       },
+      createPosOrder: async (data: any, restaurantId?: string) => {
+        return this.adapter.createPosOrder(data, restaurantId || this.defaultRestaurantId);
+      },
       getSessionOrders: async (tableIdOrSessionId: string, restaurantId?: string) => {
         return this.adapter.getSessionOrders(tableIdOrSessionId, restaurantId || this.defaultRestaurantId);
+      },
+      getOrder: async (orderId: string, restaurantId?: string) => {
+        return this.adapter.getOrder(orderId, restaurantId || this.defaultRestaurantId);
+      },
+      updateOrderStatus: async (
+        orderId: string,
+        status: Order['status'],
+        actor?: string,
+        reason?: string,
+        restaurantId?: string
+      ) => {
+        return this.adapter.updateOrderStatus(orderId, status, actor, reason, restaurantId || this.defaultRestaurantId);
+      },
+      cancelOrder: async (orderId: string, reason?: string, actor?: string, restaurantId?: string) => {
+        return this.adapter.cancelOrder(orderId, reason, actor, restaurantId || this.defaultRestaurantId);
       },
       addOrderItem: async (
         tableIdOrSessionId: string,
@@ -530,7 +552,7 @@ export class DirectauranteSDK implements IDirectauranteSDK {
         return this.adapter.updatePurchaseOrder(orderId, data, actor, restaurantId || this.defaultRestaurantId);
       },
       updateOrderStatus: async (orderId: string, status: any, actor?: string, restaurantId?: string) => {
-        return this.adapter.updateOrderStatus(orderId, status, actor, restaurantId || this.defaultRestaurantId);
+        return this.adapter.updatePurchaseOrderStatus(orderId, status, actor, restaurantId || this.defaultRestaurantId);
       },
       receivePurchaseOrder: async (orderId: string, receiptData: any, actor?: string, restaurantId?: string) => {
         return this.adapter.receivePurchaseOrder(orderId, receiptData, actor, restaurantId || this.defaultRestaurantId);
@@ -858,6 +880,69 @@ export class DirectauranteSDK implements IDirectauranteSDK {
         restaurantId?: string
       ) => {
         return this.adapter.authorizeAction(userId, permission, capability, restaurantId || this.defaultRestaurantId);
+      },
+    };
+  }
+
+  // ==========================================
+  // DELIVERY FACADE (Directaurante Core F14.1)
+  // ==========================================
+  public get delivery(): DeliverySdk {
+    return {
+      listDrivers: async (restaurantId?: string, filters?: any) => {
+        return this.adapter.listDrivers(restaurantId || this.defaultRestaurantId, filters);
+      },
+      getDriver: async (driverId: string, restaurantId?: string) => {
+        return this.adapter.getDriver(driverId, restaurantId || this.defaultRestaurantId);
+      },
+      createDriver: async (data: any, actor?: string, restaurantId?: string) => {
+        return this.adapter.createDriver(data, actor, restaurantId || this.defaultRestaurantId);
+      },
+      verifyDriver: async (driverId: string, isVerified: boolean, actor?: string, restaurantId?: string) => {
+        return this.adapter.verifyDriver(driverId, isVerified, actor, restaurantId || this.defaultRestaurantId);
+      },
+      updateDriverGps: async (driverId: string, gps: { latitude: number; longitude: number }, restaurantId?: string) => {
+        return this.adapter.updateDriverGps(driverId, gps, restaurantId || this.defaultRestaurantId);
+      },
+      findEligibleDrivers: async (restaurantId?: string, maxGpsAgeMinutes?: number) => {
+        return this.adapter.findEligibleDrivers(restaurantId || this.defaultRestaurantId, maxGpsAgeMinutes);
+      },
+      dispatchOrder: async (data: any) => {
+        return this.adapter.dispatchOrder({
+          ...data,
+          restaurant_id: data.restaurant_id || this.defaultRestaurantId,
+        });
+      },
+      markDelivered: async (dispatchId: string, actor?: string, restaurantId?: string) => {
+        return this.adapter.markDelivered(dispatchId, actor, restaurantId || this.defaultRestaurantId);
+      },
+      listDispatches: async (restaurantId?: string, filters?: any) => {
+        return this.adapter.listDispatches(restaurantId || this.defaultRestaurantId, filters);
+      },
+    };
+  }
+
+  // ==========================================
+  // DIRECTPRINT FACADE (Core F15.2)
+  // ==========================================
+  public get print(): PrintSdk {
+    return {
+      listPrintJobs: async (restaurantId?: string, filters?: any) => {
+        return this.adapter.listPrintJobs(restaurantId || this.defaultRestaurantId, filters);
+      },
+      createPrintJob: async (params: any, restaurantId?: string) => {
+        return this.adapter.createPrintJob(params, restaurantId || this.defaultRestaurantId);
+      },
+      updatePrintJobStatus: async (
+        jobId: string,
+        status: PrintJob['status'],
+        errorMessage?: string,
+        restaurantId?: string
+      ) => {
+        return this.adapter.updatePrintJobStatus(jobId, status, errorMessage, restaurantId || this.defaultRestaurantId);
+      },
+      listPrinters: async (restaurantId?: string) => {
+        return this.adapter.listPrinters(restaurantId || this.defaultRestaurantId);
       },
     };
   }

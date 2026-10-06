@@ -4,7 +4,8 @@
  */
 
 import { db, DEFAULT_RESTAURANT_ID } from '../../core/database';
-import { Printer, PrinterRoutingRule, OrderItem } from '../../core/types';
+import { Printer, PrinterRoutingRule, OrderItem, PrintJob } from '../../core/types';
+import { eventBus } from '../../core/eventBus';
 
 export class PrintService {
   public static getPrinters(restaurant_id: string = DEFAULT_RESTAURANT_ID): Printer[] {
@@ -13,6 +14,72 @@ export class PrintService {
 
   public static getRoutingRules(restaurant_id: string = DEFAULT_RESTAURANT_ID): PrinterRoutingRule[] {
     return db.get('printer_routing_rules').filter((r) => r.restaurant_id === restaurant_id);
+  }
+
+  public static createPrinter(
+    data: {
+      name: string;
+      connection_type: 'network' | 'usb';
+      host?: string;
+      port?: number;
+      station: 'kitchen' | 'bar' | 'cash' | 'cashier';
+      paper_width: 58 | 80;
+    },
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): Printer {
+    const id = `prn_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const newPrinter: Printer = {
+      id,
+      restaurant_id,
+      name: data.name,
+      connection_type: data.connection_type,
+      host: data.host || '127.0.0.1',
+      address: data.host || '127.0.0.1',
+      port: data.port || (data.connection_type === 'network' ? 9100 : 0),
+      station: data.station,
+      paper_width: data.paper_width,
+      is_active: true,
+      enabled: true,
+      protocol: 'esc_pos',
+    };
+    db.get('printers').push(newPrinter);
+    db.save();
+    return newPrinter;
+  }
+
+  public static updatePrinter(
+    id: string,
+    updates: Partial<Printer>,
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): Printer {
+    const printer = db.get('printers').find((p) => p.id === id && p.restaurant_id === restaurant_id);
+    if (!printer) {
+      throw new Error(`Impresora ${id} no encontrada.`);
+    }
+    if (updates.name !== undefined) printer.name = updates.name;
+    if (updates.connection_type !== undefined) printer.connection_type = updates.connection_type;
+    if (updates.host !== undefined) {
+      printer.host = updates.host;
+      printer.address = updates.host;
+    }
+    if (updates.port !== undefined) printer.port = updates.port;
+    if (updates.station !== undefined) printer.station = updates.station;
+    if (updates.paper_width !== undefined) printer.paper_width = updates.paper_width;
+    if (updates.is_active !== undefined) {
+      printer.is_active = updates.is_active;
+      printer.enabled = updates.is_active;
+    }
+    db.save();
+    return printer;
+  }
+
+  public static deletePrinter(id: string, restaurant_id: string = DEFAULT_RESTAURANT_ID): boolean {
+    const printers = db.get('printers');
+    const index = printers.findIndex((p) => p.id === id && p.restaurant_id === restaurant_id);
+    if (index === -1) return false;
+    printers.splice(index, 1);
+    db.save();
+    return true;
   }
 
   /**
@@ -232,5 +299,105 @@ export class PrintService {
     const escpos_hex = `1B401B6101${Array.from(textBytes).map((b) => b.toString(16).padStart(2, '0')).join('')}1D564200`;
 
     return { formatted_ticket, escpos_hex, bytes_count: textBytes.length + 10 };
+  }
+
+  // ==========================================
+  // PRINT JOBS LIFECYCLE (F14 Core Preparation)
+  // ==========================================
+
+  public static listPrintJobs(
+    restaurant_id: string = DEFAULT_RESTAURANT_ID,
+    filters?: { status?: string; printer_id?: string; station?: string }
+  ): any[] {
+    let jobs = db.get('print_jobs').filter((j) => j.restaurant_id === restaurant_id);
+    if (filters?.status) jobs = jobs.filter((j) => j.status === filters.status);
+    if (filters?.printer_id) jobs = jobs.filter((j) => j.printer_id === filters.printer_id);
+    if (filters?.station) jobs = jobs.filter((j) => j.station === filters.station);
+    return jobs;
+  }
+
+  public static createPrintJob(
+    params: {
+      type: PrintJob['type'];
+      station: string;
+      printer_id?: string;
+      order_id?: string;
+      table_id?: string;
+      table_number?: string;
+      formatted_content: string;
+      escpos_hex?: string;
+      paper_width?: 58 | 80;
+      status?: PrintJob['status'];
+      actor?: string;
+    },
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): PrintJob {
+    const printers = db.get('printers').filter((p) => p.restaurant_id === restaurant_id);
+    const targetPrinter = params.printer_id
+      ? printers.find((p) => p.id === params.printer_id)
+      : printers.find((p) => p.station === params.station && p.is_active) || printers[0];
+
+    const printer_id = targetPrinter ? targetPrinter.id : (params.printer_id || 'printer_default');
+    const printer_name = targetPrinter ? targetPrinter.name : 'Impresora Principal';
+    const paper_width = params.paper_width || (targetPrinter ? targetPrinter.paper_width : 80);
+
+    const encoder = new TextEncoder();
+    const textBytes = encoder.encode(params.formatted_content);
+    const escpos_hex = params.escpos_hex || `1B401B6101${Array.from(textBytes).map((b) => b.toString(16).padStart(2, '0')).join('')}1D564200`;
+
+    const now = new Date().toISOString();
+    const jobId = `pjob_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    const newJob: PrintJob = {
+      id: jobId,
+      restaurant_id,
+      order_id: params.order_id,
+      table_id: params.table_id,
+      table_number: params.table_number,
+      station: params.station,
+      printer_id,
+      printer_name,
+      type: params.type,
+      paper_width,
+      status: params.status || 'queued',
+      formatted_content: params.formatted_content,
+      escpos_hex,
+      bytes_count: textBytes.length + 10,
+      created_at: now,
+      retries_count: 0,
+    };
+
+    db.get('print_jobs').push(newJob);
+    db.save();
+
+    eventBus.publish('PRINT_JOB_CREATED' as any, restaurant_id, params.actor || 'System', newJob);
+
+    return newJob;
+  }
+
+  public static updatePrintJobStatus(
+    job_id: string,
+    status: PrintJob['status'],
+    error_message?: string,
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): PrintJob {
+    const job = db.get('print_jobs').find((j) => j.id === job_id && j.restaurant_id === restaurant_id);
+    if (!job) {
+      throw new Error(`Trabajo de impresión ${job_id} no encontrado.`);
+    }
+
+    job.status = status;
+    if (error_message) {
+      job.error_message = error_message;
+      job.retries_count = (job.retries_count || 0) + 1;
+    }
+
+    db.save();
+
+    if (status === 'printed' || status === 'completed') {
+      eventBus.publish('PRINT_JOB_COMPLETED' as any, restaurant_id, 'DirectPrint Service', job);
+    }
+
+    return job;
   }
 }

@@ -432,7 +432,7 @@ export class FinanceService {
     const openedBy = dto.opened_by || (dto.user_id ? 'Usuario ' + dto.user_id : 'Cajero');
 
     const session: CashShift = {
-      id: `shift_${Date.now()}`,
+      id: `shift_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       opened_by: openedBy,
       user_id: dto.user_id,
@@ -448,7 +448,7 @@ export class FinanceService {
 
     // Initial drawer movement
     const movement: CashMovement = {
-      id: `mov_init_${Date.now()}`,
+      id: `mov_init_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       shift_id: session.id,
       restaurant_id,
       type: 'opening_float',
@@ -462,7 +462,7 @@ export class FinanceService {
 
     // Initial financial movement
     const finMovement: FinancialMovement = {
-      id: `fin_open_${Date.now()}`,
+      id: `fin_open_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       type: 'opening',
       direction: 'in',
@@ -524,7 +524,7 @@ export class FinanceService {
 
     // Ledger closing movement
     const finMovement: FinancialMovement = {
-      id: `fin_close_${Date.now()}`,
+      id: `fin_close_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       type: 'closing',
       direction: 'out',
@@ -755,7 +755,7 @@ export class FinanceService {
     // Physical drawer impact if cash
     if (dto.payment_method === 'cash' && activeCashSession) {
       const cashMovement: CashMovement = {
-        id: `mov_exp_${Date.now()}`,
+        id: `mov_exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         shift_id: activeCashSession.id,
         restaurant_id,
         type: 'expense',
@@ -772,7 +772,7 @@ export class FinanceService {
 
     // Ledger entry
     const finMovement: FinancialMovement = {
-      id: `fin_exp_${Date.now()}`,
+      id: `fin_exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       type: 'expense',
       direction: 'out',
@@ -884,7 +884,7 @@ export class FinanceService {
     // 3. COGS: REUSING F7 RECIPE SERVICE STRICTLY
     // For all orders completed in period, calculate exact ingredient consumption cost via RecipeService
     const sessionIds = Array.from(new Set(payments.map((p) => p.table_session_id)));
-    const orders = db.get('orders').filter((o) => sessionIds.includes(o.table_session_id));
+    const orders = db.get('orders').filter((o) => o.table_session_id && sessionIds.includes(o.table_session_id));
     const orderItems = db.get('order_items').filter((oi) => orders.some((o) => o.id === oi.order_id) && oi.preparation_status !== 'cancelled');
 
     let cogs_cents = 0;
@@ -974,7 +974,7 @@ export class FinanceService {
     const now = new Date().toISOString();
     const settlement: RestaurantSettlement = {
       ...data,
-      id: `set_rest_${Date.now()}`,
+      id: `set_rest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       created_at: now,
     };
@@ -983,7 +983,7 @@ export class FinanceService {
 
     // Ledger settlement movement
     const finMovement: FinancialMovement = {
-      id: `fin_set_${Date.now()}`,
+      id: `fin_set_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       type: 'settlement',
       direction: 'in',
@@ -1019,7 +1019,7 @@ export class FinanceService {
     const now = new Date().toISOString();
     const settlement: DriverSettlement = {
       ...data,
-      id: `set_drv_${Date.now()}`,
+      id: `set_drv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       created_at: now,
     };
@@ -1028,7 +1028,7 @@ export class FinanceService {
 
     // Ledger driver settlement
     const finMovement: FinancialMovement = {
-      id: `fin_drv_${Date.now()}`,
+      id: `fin_drv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       restaurant_id,
       type: 'settlement',
       direction: settlement.balance_due_cents >= 0 ? 'in' : 'out',

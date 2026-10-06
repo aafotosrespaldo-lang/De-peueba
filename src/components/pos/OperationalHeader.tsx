@@ -152,10 +152,10 @@ export const OperationalHeader: React.FC<OperationalHeaderProps> = ({
           <button
             onClick={onOpenPrint}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#041E72] hover:bg-[#031758] text-white text-xs font-semibold border border-white/20 transition cursor-pointer"
-            title="DirectPrint ESC/POS"
+            title="Impresoras y Tickets"
           >
             <Printer className="w-3.5 h-3.5 text-white/80" />
-            <span className="hidden sm:inline">DirectPrint</span>
+            <span className="hidden sm:inline">Impresión</span>
           </button>
           <button
             onClick={onOpenImport}

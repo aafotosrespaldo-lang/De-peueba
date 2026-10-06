@@ -177,8 +177,16 @@ export class CrmService {
 
     const addresses: CustomerAddress[] = [];
     if (data.address) {
+      if (data.address.latitude !== undefined && (isNaN(data.address.latitude) || data.address.latitude < -90 || data.address.latitude > 90)) {
+        throw new Error(`Coordenada de latitud inválida: ${data.address.latitude}.`);
+      }
+      if (data.address.longitude !== undefined && (isNaN(data.address.longitude) || data.address.longitude < -180 || data.address.longitude > 180)) {
+        throw new Error(`Coordenada de longitud inválida: ${data.address.longitude}.`);
+      }
+
       addresses.push({
         id: `addr_${Date.now()}_1`,
+        restaurant_id: data.address.restaurant_id,
         street: data.address.street,
         number: data.address.number,
         interior: data.address.interior,
@@ -186,6 +194,8 @@ export class CrmService {
         city: data.address.city,
         state: data.address.state,
         postal_code: data.address.postal_code,
+        latitude: data.address.latitude,
+        longitude: data.address.longitude,
         references: data.address.references,
         label: data.address.label || 'home',
         is_default: true,
@@ -312,8 +322,17 @@ export class CrmService {
       customer.addresses.forEach((a) => (a.is_default = false));
     }
 
+    // Validate coordinates if provided
+    if (addressData.latitude !== undefined && (isNaN(addressData.latitude) || addressData.latitude < -90 || addressData.latitude > 90)) {
+      throw new Error(`Coordenada de latitud inválida: ${addressData.latitude}.`);
+    }
+    if (addressData.longitude !== undefined && (isNaN(addressData.longitude) || addressData.longitude < -180 || addressData.longitude > 180)) {
+      throw new Error(`Coordenada de longitud inválida: ${addressData.longitude}.`);
+    }
+
     const newAddress: CustomerAddress = {
       id: `addr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      restaurant_id: addressData.restaurant_id,
       street: addressData.street || '',
       number: addressData.number || '',
       interior: addressData.interior,
@@ -321,6 +340,8 @@ export class CrmService {
       city: addressData.city || 'Monterrey',
       state: addressData.state || 'Nuevo León',
       postal_code: addressData.postal_code || '',
+      latitude: addressData.latitude,
+      longitude: addressData.longitude,
       references: addressData.references,
       label: addressData.label || 'home',
       is_default: customer.addresses.length === 0 || Boolean(addressData.is_default),
@@ -445,6 +466,22 @@ export class CrmService {
       segment = 'active_customer';
     }
 
+    // Derive favorite products dynamically from order items
+    const completedOrderIds = completedOrders.map((o) => o.id);
+    const customerItems = db
+      .get('order_items')
+      .filter((i) => completedOrderIds.includes(i.order_id) && i.preparation_status !== 'cancelled');
+
+    const productCounts: Record<string, number> = {};
+    customerItems.forEach((item) => {
+      productCounts[item.product_name] = (productCounts[item.product_name] || 0) + item.quantity;
+    });
+
+    const favoriteProducts = Object.entries(productCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([name]) => name);
+
     return {
       customer_id,
       order_count: orderCount,
@@ -453,11 +490,27 @@ export class CrmService {
       last_order_at: lastOrderAt,
       first_order_at: firstOrderAt,
       favorite_restaurant_id: favRest,
-      favorite_product_names: ['Hamburguesa Doble Angus', 'Boneless BBQ', 'Cerveza Ultra'],
+      favorite_product_names: favoriteProducts,
       points_balance: pointsBalance,
       tier,
       segment,
     };
+  }
+
+  /**
+   * Complete Order History for a Customer across Dine-In, Delivery, POS, and Online
+   */
+  public static getCustomerOrderHistory(
+    customer_id: string,
+    restaurant_id: string = DEFAULT_RESTAURANT_ID
+  ): Array<Order & { items: any[] }> {
+    const orders = db.get('orders').filter((o) => o.customer_id === customer_id && o.restaurant_id === restaurant_id);
+    const orderItems = db.get('order_items');
+
+    return orders.map((ord) => ({
+      ...ord,
+      items: orderItems.filter((i) => i.order_id === ord.id),
+    }));
   }
 
   // ==========================================

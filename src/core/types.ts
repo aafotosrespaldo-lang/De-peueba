@@ -11,7 +11,38 @@ export interface Restaurant {
   legal_name: string;
   currency: string; // e.g. "MXN"
   tax_rate: number; // e.g. 0.16
+  status?: 'active' | 'suspended' | 'pending_approval';
+  is_approved?: boolean;
+  phone?: string;
+  email?: string;
+  address?: {
+    street: string;
+    number: string;
+    interior?: string;
+    colony: string;
+    city: string;
+    state: string;
+    postal_code: string;
+    latitude?: number;
+    longitude?: number;
+  };
+  operating_hours?: {
+    monday?: { open: string; close: string; closed?: boolean };
+    tuesday?: { open: string; close: string; closed?: boolean };
+    wednesday?: { open: string; close: string; closed?: boolean };
+    thursday?: { open: string; close: string; closed?: boolean };
+    friday?: { open: string; close: string; closed?: boolean };
+    saturday?: { open: string; close: string; closed?: boolean };
+    sunday?: { open: string; close: string; closed?: boolean };
+  };
+  settings?: {
+    allow_negative_stock?: boolean;
+    require_open_cash_for_payments?: boolean;
+    default_preparation_time_minutes?: number;
+    auto_print_order_tickets?: boolean;
+  };
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Branch {
@@ -44,11 +75,27 @@ export interface OrderItemAllocation {
 
 export type KdsStation = 'kitchen' | 'bar' | 'grill' | 'desserts' | 'expediter' | (string & {});
 
+export interface ProductVariant {
+  id: string;
+  name: string; // e.g. "Chico", "Mediano", "Grande"
+  price_cents: number;
+  sku?: string;
+  inventory_item_id?: string;
+}
+
+export interface ProductTopping {
+  id: string;
+  name: string; // e.g. "Tocino Crujiente", "Aguacate Extra"
+  price_cents: number; // e.g. 2500 -> $25.00 MXN
+  max_quantity?: number;
+}
+
 export interface Product {
   id: string;
   restaurant_id: string;
+  sku?: string;
   name: string;
-  category: 'Platillos' | 'Bebidas' | 'Entradas' | 'Postres' | 'Snacks';
+  category: 'Platillos' | 'Bebidas' | 'Entradas' | 'Postres' | 'Snacks' | string;
   description: string;
   price_cents: number; // Integer cents to prevent IEEE 754 precision issues
   ingredient_ids: string[];
@@ -56,11 +103,15 @@ export interface Product {
   preparation_time_minutes: number;
   target_preparation_seconds?: number; // Target SLA for KDS timers
   available_modifiers?: string[]; // e.g. ["Extra queso", "Sin cebolla", "Término medio"]
+  variants?: ProductVariant[];
+  toppings?: ProductTopping[];
   available: boolean;
+  is_active?: boolean;
   inventory_item_id?: string; // Links product to physical inventory item
   inventory_tracking?: boolean; // false for non-inventoriable items (e.g. services, tips), default true
   auto_disable_on_zero_stock?: boolean;
   image_url?: string;
+  updated_at?: string;
 }
 
 export type TableStatus = 'available' | 'occupied' | 'pending_payment' | 'bill_requested' | 'paying' | 'closed';
@@ -150,28 +201,40 @@ export interface OrderItem {
   allocations?: OrderItemAllocation[];
 }
 
+export type OrderType = 'dine_in' | 'delivery' | 'pos' | 'directgo' | 'catering' | 'takeout';
+export type OrderStatus = 'open' | 'confirmed' | 'preparing' | 'ready' | 'assigned' | 'out_for_delivery' | 'delivered' | 'completed' | 'cancelled';
+
 export interface Order {
   id: string; // UUID/str (e.g. ord_..., or comanda ticket)
   restaurant_id: string;
   branch_id?: string;
-  table_id: string;
-  table_session_id: string; // Mandatory: belongs to TableSession
-  ticket_number?: string; // e.g. "Comanda #001", "Comanda #002"
-  order_type: 'dine_in' | 'directgo';
-  status: 'open' | 'completed' | 'cancelled';
+  table_id?: string; // Optional for delivery / takeout / catering
+  table_session_id?: string; // Optional for delivery / takeout / catering
+  ticket_number?: string; // e.g. "Comanda #001", "Pedido #104"
+  order_type: OrderType;
+  status: OrderStatus;
   subtotal_cents: number;
   tax_cents: number;
   total_cents: number;
   server_id?: string;
   customer_id?: string;
+  delivery_address_id?: string;
+  delivery_address?: string;
+  driver_id?: string;
+  driver_name?: string;
+  dispatch_status?: 'pending' | 'assigned' | 'picked_up' | 'delivered' | 'failed';
+  dispatched_at?: string;
+  delivered_at?: string;
   promotion_id?: string;
   coupon_code?: string;
   discount_cents?: number;
   points_earned?: number;
   points_redeemed?: number;
+  cancellation_reason?: string;
   notes?: string;
   created_at: string;
   closed_at?: string;
+  updated_at?: string;
 }
 
 export interface SubaccountBill {
@@ -346,6 +409,41 @@ export interface RestaurantSettlement {
   created_at: string;
 }
 
+export interface DriverProfile {
+  id: string; // e.g. drv_01
+  restaurant_id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  vehicle_type: 'motorcycle' | 'bicycle' | 'car' | 'walker';
+  license_plate?: string;
+  is_verified: boolean;
+  status: 'offline' | 'available' | 'busy' | 'suspended';
+  current_latitude?: number;
+  current_longitude?: number;
+  last_gps_at?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface DeliveryDispatch {
+  id: string; // e.g. dsp_01
+  order_id: string;
+  restaurant_id: string;
+  driver_id?: string;
+  driver_name?: string;
+  status: 'offered' | 'assigned' | 'picked_up' | 'delivered' | 'cancelled' | 'expired';
+  delivery_address: string;
+  delivery_fee_cents: number;
+  cash_to_collect_cents: number;
+  offered_at?: string;
+  expires_at?: string;
+  assigned_at?: string;
+  picked_up_at?: string;
+  delivered_at?: string;
+  created_at: string;
+}
+
 export interface DriverSettlement {
   id: string;
   restaurant_id: string;
@@ -489,9 +587,20 @@ export interface PrintJob {
   station: string;
   printer_id: string;
   printer_name?: string;
-  type: 'kitchen_ticket' | 'bar_ticket' | 'pre_check' | 'receipt' | 'z_report' | 'test';
+  type:
+    | 'kitchen'
+    | 'bar'
+    | 'cashier'
+    | 'customer'
+    | 'general'
+    | 'kitchen_ticket'
+    | 'bar_ticket'
+    | 'pre_check'
+    | 'receipt'
+    | 'z_report'
+    | 'test';
   paper_width: 58 | 80;
-  status: 'queued' | 'sent' | 'printed' | 'failed';
+  status: 'pending' | 'queued' | 'processing' | 'sent' | 'printed' | 'completed' | 'failed';
   formatted_content: string;
   escpos_hex: string;
   bytes_count: number;
@@ -1262,6 +1371,7 @@ export interface StaffSummary {
 
 export interface CustomerAddress {
   id: string;
+  restaurant_id?: string;
   street: string;
   number: string;
   interior?: string;
@@ -1269,6 +1379,8 @@ export interface CustomerAddress {
   city: string;
   state: string;
   postal_code: string;
+  latitude?: number;
+  longitude?: number;
   references?: string;
   label: 'home' | 'work' | 'other';
   is_default: boolean;

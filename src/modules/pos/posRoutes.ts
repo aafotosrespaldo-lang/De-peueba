@@ -5,6 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import { PosService } from './posService';
+import { deliveryRouter } from '../delivery/deliveryRoutes';
 import { KdsService } from '../kds/kdsService';
 import { CashService } from '../cash/cashService';
 import { PrintService } from '../directprint/printService';
@@ -52,6 +53,10 @@ import { solutionRouter } from '../solutions/solutionRoutes';
 apiRouter.use('/solutions', solutionRouter);
 apiRouter.use('/pos/solutions', solutionRouter);
 apiRouter.use('/master/solutions', solutionRouter);
+
+// Mount Directaurante Core Delivery Module (FASE 14 / F14.1)
+apiRouter.use('/delivery', deliveryRouter);
+apiRouter.use('/pos/delivery', deliveryRouter);
 
 // ==========================================
 // SYSTEM & PLUGINS
@@ -275,6 +280,72 @@ apiRouter.delete('/pos/items/:itemId', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.post('/pos/orders', (req: Request, res: Response) => {
+  try {
+    const restaurantId = (req.query.restaurant_id as string) || req.body.restaurant_id || DEFAULT_RESTAURANT_ID;
+    const actor = (req.headers['x-actor-name'] as string) || req.body.server_id || 'Cajero POS';
+    const order = PosService.createDirectPostOrder({
+      ...req.body,
+      restaurant_id: restaurantId,
+      server_id: actor,
+    });
+    res.status(201).json({ success: true, order });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/pos/orders/:id', (req: Request, res: Response) => {
+  try {
+    const restaurantId = (req.query.restaurant_id as string) || DEFAULT_RESTAURANT_ID;
+    const orders = db.get('orders');
+    const order = orders.find((o) => o.id === req.params.id && o.restaurant_id === restaurantId);
+    if (!order) {
+      return res.status(404).json({ error: 'Orden no encontrada.' });
+    }
+    const items = db.get('order_items').filter((i) => i.order_id === order.id);
+    res.json({ success: true, order: { ...order, items } });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.patch('/pos/orders/:id/status', (req: Request, res: Response) => {
+  try {
+    const { status, actor, reason, restaurant_id } = req.body;
+    const restaurantId = (req.query.restaurant_id as string) || restaurant_id || DEFAULT_RESTAURANT_ID;
+    if (!status) {
+      return res.status(400).json({ error: 'El estado es requerido.' });
+    }
+    const updated = PosService.updateOrderStatus(
+      req.params.id,
+      status,
+      actor || 'Operador',
+      reason,
+      restaurantId
+    );
+    res.json({ success: true, order: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/pos/orders/:id/cancel', (req: Request, res: Response) => {
+  try {
+    const { reason, actor, restaurant_id } = req.body;
+    const restaurantId = (req.query.restaurant_id as string) || restaurant_id || DEFAULT_RESTAURANT_ID;
+    const cancelled = PosService.cancelOrder(
+      req.params.id,
+      reason || 'Cancelación solicitada',
+      actor || 'Operador',
+      restaurantId
+    );
+    res.json({ success: true, order: cancelled });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // BILLS & SETTLEMENTS
 // ==========================================
@@ -490,16 +561,105 @@ apiRouter.get('/events/history', (req: Request, res: Response) => {
 // DIRECTPRINT PREPARATION
 // ==========================================
 
-apiRouter.get('/print/printers', (_req: Request, res: Response) => {
-  const printers = PrintService.getPrinters(DEFAULT_RESTAURANT_ID);
-  const rules = PrintService.getRoutingRules(DEFAULT_RESTAURANT_ID);
+apiRouter.get('/print/printers', (req: Request, res: Response) => {
+  const restaurantId = (req.query.restaurant_id as string) || DEFAULT_RESTAURANT_ID;
+  const printers = PrintService.getPrinters(restaurantId);
+  const rules = PrintService.getRoutingRules(restaurantId);
   res.json({ printers, rules });
+});
+
+apiRouter.post('/print/printers', (req: Request, res: Response) => {
+  try {
+    const restaurantId = (req.query.restaurant_id as string) || req.body.restaurant_id || DEFAULT_RESTAURANT_ID;
+    const printer = PrintService.createPrinter(req.body, restaurantId);
+    res.status(201).json({ success: true, printer });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.patch('/print/printers/:id', (req: Request, res: Response) => {
+  try {
+    const restaurantId = (req.query.restaurant_id as string) || req.body.restaurant_id || DEFAULT_RESTAURANT_ID;
+    const printer = PrintService.updatePrinter(req.params.id, req.body, restaurantId);
+    res.json({ success: true, printer });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/print/printers/:id', (req: Request, res: Response) => {
+  try {
+    const restaurantId = (req.query.restaurant_id as string) || DEFAULT_RESTAURANT_ID;
+    const deleted = PrintService.deletePrinter(req.params.id, restaurantId);
+    res.json({ success: deleted });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 apiRouter.post('/print/ticket-preview', (req: Request, res: Response) => {
   const { station, table_number, waiter, items } = req.body;
   const ticket = PrintService.generateEscPosTicket(station || 'kitchen', table_number || 'Mesa 1', waiter || 'Mesero', items || []);
   res.json(ticket);
+});
+
+apiRouter.get('/print/jobs', (req: Request, res: Response) => {
+  try {
+    const restaurantId = (req.query.restaurant_id as string) || DEFAULT_RESTAURANT_ID;
+    const print_jobs = PrintService.listPrintJobs(restaurantId, {
+      status: req.query.status as string,
+      printer_id: req.query.printer_id as string,
+      station: req.query.station as string,
+    });
+    res.json({ success: true, print_jobs, jobs: print_jobs });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/print/jobs', (req: Request, res: Response) => {
+  try {
+    const actor = (req.headers['x-actor-name'] as string) || 'System';
+    const restaurantId = (req.query.restaurant_id as string) || req.body.restaurant_id || DEFAULT_RESTAURANT_ID;
+    const print_job = PrintService.createPrintJob({ ...req.body, actor }, restaurantId);
+    res.status(201).json({ success: true, print_job, job: print_job });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.patch('/print/jobs/:id/status', (req: Request, res: Response) => {
+  try {
+    const { status, error_message, restaurant_id } = req.body;
+    const restaurantId = (req.query.restaurant_id as string) || restaurant_id || DEFAULT_RESTAURANT_ID;
+    const print_job = PrintService.updatePrintJobStatus(req.params.id, status, error_message, restaurantId);
+    res.json({ success: true, print_job, job: print_job });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/print/agent/download', (_req: Request, res: Response) => {
+  const script = `@echo off
+echo ========================================================
+echo   DIRECTPRINT AGENT - SERVICIO LOCAL DE IMPRESION
+echo ========================================================
+echo Iniciando agente de impresion para Windows...
+echo Conectando al Core de Directaurante...
+echo.
+node -e "
+const { DirectPrintAgent } = require('./src/modules/directprint/directPrintAgent');
+const agent = new DirectPrintAgent({
+  coreUrl: 'http://localhost:3000',
+  restaurantId: 'rest_carlos_01'
+});
+agent.start();
+"
+pause`;
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Disposition', 'attachment; filename="start-directprint-agent.bat"');
+  res.send(script);
 });
 
 // ==========================================

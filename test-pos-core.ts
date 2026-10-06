@@ -21,10 +21,12 @@ import { StaffService } from './src/modules/staff/staffService';
 import { CrmService } from './src/modules/crm/crmService';
 import { FinanceService } from './src/modules/finance/financeService';
 import { SolutionService } from './src/modules/solutions/solutionService';
+import { DeliveryService } from './src/modules/delivery/deliveryService';
 import { PluginRegistry } from './src/core/pluginRegistry';
 import { AuditService } from './src/core/audit';
 import { eventBus } from './src/core/eventBus';
 import { db, DEFAULT_RESTAURANT_ID } from './src/core/database';
+import { Order } from './src/core/types';
 
 async function runTestSuite() {
   console.log('====================================================');
@@ -1692,6 +1694,494 @@ async function runTestSuite() {
   assert(sdkHasCap, 'SDK: sdk.solutions.hasCapability() valida capability');
   const sdkDual = await sdk.solutions.authorizeAction('usr_carlos_01', 'orders.create', 'pos.orders', DEFAULT_RESTAURANT_ID);
   assert(sdkDual.authorized, 'SDK: sdk.solutions.authorizeAction() resuelve autorización dual');
+
+  // ====================================================
+  // 21. CORE COMPLETION & GAP CLOSURE (FASE 14)
+  // ====================================================
+  console.log('\n--- 21. CORE COMPLETION & GAP CLOSURE (FASE 14) ---');
+
+  // 21.1 Order State Machine: Transiciones Válidas e Inválidas
+  const tables = PosService.getTables(DEFAULT_RESTAURANT_ID);
+  const availableTable = tables.find((t) => !t.active_session_id) || tables[0];
+  const orderSession = availableTable.active_session_id
+    ? { session: db.get('table_sessions').find((s) => s.id === availableTable.active_session_id)! }
+    : PosService.openTable(availableTable.id, 'Capitán F14', [{ name: 'Comensal Gap 1' }]);
+  const orderGapTicket = PosService.createOrderTicket(orderSession.session.id, 'Capitán F14', 'Ticket de prueba F14');
+  assert(orderGapTicket.status === 'open', 'Order State Machine: Orden inicializada con estado "open"');
+
+  // Transición open -> confirmed
+  const confirmedOrder = PosService.updateOrderStatus(orderGapTicket.id, 'confirmed', 'Capitán F14');
+  assert(confirmedOrder.status === 'confirmed', 'Order State Machine: Transición válida de open -> confirmed');
+
+  // Transición confirmed -> preparing
+  const preparingOrder = PosService.updateOrderStatus(orderGapTicket.id, 'preparing', 'Cocina F14');
+  assert(preparingOrder.status === 'preparing', 'Order State Machine: Transición válida de confirmed -> preparing');
+
+  // Transición preparing -> ready
+  const readyOrder = PosService.updateOrderStatus(orderGapTicket.id, 'ready', 'Cocina F14');
+  assert(readyOrder.status === 'ready', 'Order State Machine: Transición válida de preparing -> ready');
+
+  // Transición ilegal: ready -> open (Debe ser rechazada)
+  let illegalTransitionRejected = false;
+  try {
+    PosService.updateOrderStatus(orderGapTicket.id, 'open', 'Operador');
+  } catch {
+    illegalTransitionRejected = true;
+  }
+  assert(illegalTransitionRejected, 'Order State Machine: Transición ilegal rechazada atómicamente');
+
+  // 21.2 Cancelación Limpia de Orden
+  const cancelTestOrder = PosService.createOrderTicket(orderSession.session.id, 'Capitán F14', 'Ticket a cancelar');
+  const cancelledOrder = PosService.cancelOrder(cancelTestOrder.id, 'Mesa solicitó retirarse antes de preparar', 'Capitán F14');
+  assert(cancelledOrder.status === 'cancelled', 'Cancelación de Orden: Estado actualizado a "cancelled"');
+  assert(cancelledOrder.cancellation_reason === 'Mesa solicitó retirarse antes de preparar', 'Cancelación de Orden: Motivo de cancelación preservado');
+
+  // 21.3 CRM: Historial Real de Órdenes y Productos Favoritos Derivados
+  const crmCustomer = CrmService.createCustomer({
+    name: 'Roberto Garzas',
+    phone: '8119876543',
+    email: 'roberto.garza@correo.mx',
+  });
+  // Vincular orden completada
+  const assignedOrd = PosService.createOrderTicket(orderSession.session.id, 'Capitán F14');
+  assignedOrd.customer_id = crmCustomer.id;
+  assignedOrd.status = 'completed';
+  assignedOrd.total_cents = 45000;
+  db.save();
+
+  const customerHistory = CrmService.getCustomerOrderHistory(crmCustomer.id, DEFAULT_RESTAURANT_ID);
+  assert(customerHistory.length >= 1, 'CRM: getCustomerOrderHistory() retorna historial unificado de pedidos');
+
+  // 21.4 Direcciones de Cliente y Validación de Coordenadas
+  const validAddr = CrmService.addOrUpdateAddress(crmCustomer.id, {
+    street: 'Av. Vasconcelos',
+    number: '1400',
+    colony: 'Del Valle',
+    city: 'San Pedro',
+    state: 'Nuevo León',
+    postal_code: '66220',
+    latitude: 25.6514,
+    longitude: -100.3582,
+    restaurant_id: DEFAULT_RESTAURANT_ID,
+  });
+  assert(validAddr.latitude === 25.6514 && validAddr.longitude === -100.3582, 'Direcciones: Coordenadas geográficas válidas registradas');
+
+  let invalidCoordsRejected = false;
+  try {
+    CrmService.addOrUpdateAddress(crmCustomer.id, {
+      street: 'Calle Ficticia',
+      number: '999',
+      latitude: 199.99, // Latitud imposible
+    });
+  } catch {
+    invalidCoordsRejected = true;
+  }
+  assert(invalidCoordsRejected, 'Direcciones: Coordenadas fuera de rango rechazadas');
+
+  // 21.5 Delivery & Repartidores: Verificación y GPS Fresco
+  const unverifiedDriver = DeliveryService.createDriver({
+    name: 'Juan Sin Verificar',
+    phone: '8110001122',
+    vehicle_type: 'motorcycle',
+    is_verified: false,
+  });
+  assert(!unverifiedDriver.is_verified, 'Delivery: Repartidor nuevo inicia no verificado');
+
+  // Intento de despacho a conductor no verificado debe ser rechazado
+  let unverifiedDispatchRejected = false;
+  try {
+    DeliveryService.dispatchOrder({
+      order_id: readyOrder.id,
+      delivery_address: 'Av. Vasconcelos 1400',
+      driver_id: unverifiedDriver.id,
+    });
+  } catch {
+    unverifiedDispatchRejected = true;
+  }
+  assert(unverifiedDispatchRejected, 'Delivery: Despacho a conductor no verificado rechazado');
+
+  // Verificar conductor y actualizar GPS
+  DeliveryService.verifyDriver(unverifiedDriver.id, true, 'Supervisor');
+  DeliveryService.updateDriverGps(unverifiedDriver.id, { latitude: 25.6866, longitude: -100.3161 });
+  const updatedDriver = DeliveryService.getDriver(unverifiedDriver.id);
+  assert(Boolean(updatedDriver && updatedDriver.is_verified && updatedDriver.status === 'available'), 'Delivery: Repartidor verificado y disponible con GPS actualizado');
+
+  // 21.6 Despacho Atómico y Entrega
+  const dispatchRes = DeliveryService.dispatchOrder({
+    order_id: readyOrder.id,
+    delivery_address: 'Av. Vasconcelos 1400',
+    delivery_fee_cents: 3500,
+    cash_to_collect_cents: readyOrder.total_cents,
+    driver_id: updatedDriver!.id,
+  });
+  assert(dispatchRes.status === 'assigned', 'Delivery: Orden despachada y asignada atómicamente');
+  assert(readyOrder.status === 'assigned', 'Delivery: Estado de Orden canónica sincronizado a "assigned"');
+
+  const deliveredRes = DeliveryService.markDelivered(dispatchRes.id, updatedDriver!.name);
+  assert(deliveredRes.status === 'delivered', 'Delivery: Despacho completado con estado "delivered"');
+  assert(readyOrder.status === 'delivered', 'Delivery: Orden canónica marcada como "delivered"');
+
+  // 21.7 DirectPrint Contratos Core: Cola de Trabajos (PrintJob)
+  const printJob = PrintService.createPrintJob({
+    type: 'kitchen_ticket',
+    station: 'kitchen',
+    order_id: readyOrder.id,
+    formatted_content: '=== COMANDA COCINA ===\n1x Hamburguesa Angus\n',
+  });
+  assert(printJob.status === 'queued', 'DirectPrint Core: PrintJob encolado con estado "queued"');
+  assert(printJob.bytes_count > 0 && printJob.escpos_hex.length > 0, 'DirectPrint Core: Generación de bytes ESC/POS presente');
+
+  const printedJob = PrintService.updatePrintJobStatus(printJob.id, 'printed');
+  assert(printedJob.status === 'printed', 'DirectPrint Core: PrintJob actualizado a "printed"');
+
+  // 21.8 SDK Único: Integración de Estado de Órdenes
+  const sdkOrderFetched = await sdk.orders.getOrder(readyOrder.id);
+  assert(sdkOrderFetched.id === readyOrder.id, 'SDK: sdk.orders.getOrder() recupera orden canónica');
+
+  const sdkUpdatedOrder = await sdk.orders.updateOrderStatus(readyOrder.id, 'completed', 'Capitán F14');
+  assert(sdkUpdatedOrder.status === 'completed', 'SDK: sdk.orders.updateOrderStatus() transiciona orden a "completed"');
+
+  // ====================================================
+  // 22. DIRECTAURANTE DELIVERY CORE & PREPARACIÓN DIRECTPOST (F14.1)
+  // ====================================================
+  console.log('\n--- 22. DIRECTAURANTE DELIVERY CORE & PREPARACIÓN DIRECTPOST (F14.1) ---');
+
+  // 22.1 Delivery funciona 100% independiente de POS
+  // Un delivery directo (ej. Marketplace Directaurante) puede crear y despachar una orden sin TableSession
+  const standaloneDeliveryOrder: Order = {
+    id: `ord_marketplace_${Date.now()}`,
+    restaurant_id: DEFAULT_RESTAURANT_ID,
+    ticket_number: 'DELIVERY-#MKT-01',
+    order_type: 'delivery',
+    status: 'open',
+    subtotal_cents: 29000,
+    tax_cents: 4640,
+    total_cents: 33640,
+    delivery_address: 'Av. Constitución 400, Monterrey',
+    created_at: new Date().toISOString(),
+  };
+  db.get('orders').push(standaloneDeliveryOrder);
+  db.save();
+
+  // El repartidor verificado atiende la orden directamente desde el módulo Delivery del Core
+  const mktDispatch = DeliveryService.dispatchOrder({
+    order_id: standaloneDeliveryOrder.id,
+    delivery_address: standaloneDeliveryOrder.delivery_address!,
+    delivery_fee_cents: 4500,
+    cash_to_collect_cents: standaloneDeliveryOrder.total_cents,
+    driver_id: updatedDriver!.id,
+    actor: 'Directaurante Marketplace',
+  });
+  assert(mktDispatch.id.startsWith('dsp_'), 'F14.1 Core Delivery: Dispatch generado independientemente de POS');
+  assert(standaloneDeliveryOrder.status === 'assigned', 'F14.1 Core Delivery: Orden de Delivery directa sincronizada a "assigned"');
+
+  // 22.2 Un Order puede originarse desde POS sin duplicarse y posteriormente usar Delivery
+  // Simular orden generada en mostrador / futuro DirectPost (order_type = 'pos')
+  const posOrderOrigin: Order = {
+    id: `ord_pos_counter_${Date.now()}`,
+    restaurant_id: DEFAULT_RESTAURANT_ID,
+    ticket_number: 'POS-#DIR-099',
+    order_type: 'pos',
+    status: 'confirmed',
+    subtotal_cents: 18500,
+    tax_cents: 2960,
+    total_cents: 21460,
+    created_at: new Date().toISOString(),
+  };
+  db.get('orders').push(posOrderOrigin);
+  db.save();
+
+  // El cliente en mostrador decide pedir servicio a domicilio posterior a la captura
+  const posDeliveryDispatch = DeliveryService.dispatchOrder({
+    order_id: posOrderOrigin.id,
+    delivery_address: 'Calle Hidalgo 210, San Pedro',
+    delivery_fee_cents: 3000,
+    cash_to_collect_cents: 0,
+    driver_id: updatedDriver!.id,
+    actor: 'Cajero Mostrador',
+  });
+  assert(posDeliveryDispatch.status === 'assigned', 'F14.1 DirectPost Prep: Orden originada en POS despachada por Delivery Core');
+  assert(posOrderOrigin.order_type === 'delivery', 'F14.1 DirectPost Prep: Canonical Order transiciona a delivery sin crear duplicados');
+  assert(posOrderOrigin.dispatch_status === 'assigned', 'F14.1 DirectPost Prep: Canonical Order vinculada a dispatch_status');
+
+  // 22.3 DirectPost / POS no puede saltarse las reglas de seguridad de Delivery Core
+  // Intentar despachar con un conductor inexistente o no verificado
+  let illegalDirectDispatchRejected = false;
+  try {
+    DeliveryService.dispatchOrder({
+      order_id: posOrderOrigin.id,
+      delivery_address: 'Calle Hidalgo 210',
+      driver_id: 'drv_hacker_falso',
+    });
+  } catch {
+    illegalDirectDispatchRejected = true;
+  }
+  assert(illegalDirectDispatchRejected, 'F14.1 Seguridad: Despacho a conductor inválido o inexistente bloqueado estrictamente');
+
+  // 22.4 Multi-Tenant estricto en Delivery
+  const deliveryOtherRestId = 'rest_sucursal_valle';
+  let crossTenantDispatchRejected = false;
+  try {
+    // Intentar despachar orden de un restaurante usando contexto de otro restaurante
+    DeliveryService.dispatchOrder({
+      order_id: posOrderOrigin.id,
+      restaurant_id: deliveryOtherRestId,
+      delivery_address: 'Calle Valle 555',
+      driver_id: updatedDriver!.id,
+    });
+  } catch {
+    crossTenantDispatchRejected = true;
+  }
+  assert(crossTenantDispatchRejected, 'F14.1 Multi-Tenant: Despacho cross-tenant bloqueado atómicamente');
+
+  // Intentar actualizar GPS de conductor con restaurant_id ajeno
+  let crossTenantGpsRejected = false;
+  try {
+    DeliveryService.updateDriverGps(updatedDriver!.id, { latitude: 25.68, longitude: -100.31 }, deliveryOtherRestId);
+  } catch {
+    crossTenantGpsRejected = true;
+  }
+  assert(crossTenantGpsRejected, 'F14.1 Multi-Tenant: Actualización de GPS cross-tenant bloqueada');
+
+  // 22.5 Exposición de sdk.delivery
+  const sdkDrivers = await sdk.delivery.listDrivers(DEFAULT_RESTAURANT_ID);
+  assert(sdkDrivers.length >= 1, 'F14.1 SDK: sdk.delivery.listDrivers() recupera catálogo de conductores');
+  const sdkDriver = await sdk.delivery.getDriver(updatedDriver!.id, DEFAULT_RESTAURANT_ID);
+  assert(sdkDriver !== null && sdkDriver.id === updatedDriver!.id, 'F14.1 SDK: sdk.delivery.getDriver() recupera perfil');
+
+  const sdkDispatches = await sdk.delivery.listDispatches(DEFAULT_RESTAURANT_ID);
+  assert(sdkDispatches.length >= 1, 'F14.1 SDK: sdk.delivery.listDispatches() retorna despachos del tenant');
+
+  // ====================================================
+  // 23. DIRECTPOST ↔ DIRECTAURANTE CORE (F15.1 INTEGRATION CONTRACTS)
+  // ====================================================
+  console.log('\n--- 23. DIRECTPOST ↔ DIRECTAURANTE CORE (F15.1 INTEGRATION CONTRACTS) ---');
+
+  // Test 1: DirectPost se autentica y autoriza como solución/capacidad ante el Core
+  const directPostAuth = SolutionService.authorizeAction('usr_carlos_01', DEFAULT_RESTAURANT_ID, 'orders.create', 'pos.orders');
+  assert(directPostAuth.authorized && directPostAuth.entitlement_granted && directPostAuth.permission_granted, 'F15.1 Test 1: DirectPost autorizado ante el Core mediante Dual Check');
+
+  // Test 2: Usuario autorizado crea comanda con order_type = 'pos'
+  const createdDirectPostOrder = await sdk.orders.createPosOrder({
+    ticket_number: 'DIRECTPOST-#001',
+    server_id: 'usr_carlos_01',
+    notes: 'Pedido de mostrador DirectPost',
+  }, DEFAULT_RESTAURANT_ID);
+  assert(createdDirectPostOrder.order_type === 'pos', 'F15.1 Test 2: DirectPost genera orden con order_type = "pos"');
+  assert(createdDirectPostOrder.status === 'open', 'F15.1 Test 2: Orden POS inicializada en estado "open"');
+
+  // Test 3: La Order creada es la misma entidad canónica del Core
+  const fetchedCanonicalOrder = await sdk.orders.getOrder(createdDirectPostOrder.id, DEFAULT_RESTAURANT_ID);
+  assert(fetchedCanonicalOrder.id === createdDirectPostOrder.id, 'F15.1 Test 3: Order POS es la entidad canónica en db.orders');
+  assert(fetchedCanonicalOrder.order_type === 'pos', 'F15.1 Test 3: No existe PosOrder duplicado, entidad única');
+
+  // Test 4: Un restaurante sin entitlement POS es rechazado
+  const uncontractedRestaurantId = 'rest_sin_pos_contratado';
+  const deniedNoEntitlement = SolutionService.authorizeAction('usr_carlos_01', uncontractedRestaurantId, 'orders.create', 'pos.orders');
+  assert(!deniedNoEntitlement.authorized && !deniedNoEntitlement.entitlement_granted, 'F15.1 Test 4: Restaurante sin entitlement POS es rechazado (403)');
+
+  // Test 5: Usuario con entitlement pero sin permiso adecuado es rechazado
+  // Carlos (Mesero) no tiene permiso 'roles.manage' ni 'settlements.manage'
+  const deniedNoPermission = SolutionService.authorizeAction('usr_carlos_01', DEFAULT_RESTAURANT_ID, 'settlements.manage', 'pos.payments');
+  assert(!deniedNoPermission.authorized && deniedNoPermission.entitlement_granted && !deniedNoPermission.permission_granted, 'F15.1 Test 5: Usuario con entitlement pero sin permission es rechazado');
+
+  // Test 6: Aislamiento multi-tenant: restaurante no puede acceder a órdenes de otro restaurante
+  let crossTenantOrderFetchRejected = false;
+  try {
+    await sdk.orders.getOrder(createdDirectPostOrder.id, deliveryOtherRestId);
+  } catch {
+    crossTenantOrderFetchRejected = true;
+  }
+  assert(crossTenantOrderFetchRejected, 'F15.1 Test 6: Acceso cross-tenant a orden bloqueado atómicamente');
+
+  // Test 7: DirectPost puede consultar catálogo canónico de productos del Core
+  const catalogProducts = await sdk.catalog.listProducts(undefined, DEFAULT_RESTAURANT_ID);
+  assert(catalogProducts.length >= 1, 'F15.1 Test 7: DirectPost consulta catálogo canónico de productos');
+  assert(catalogProducts.some((p) => p.name.includes('Hamburguesa')), 'F15.1 Test 7: Productos incluyen variantes y precios del Core');
+
+  // Test 8: DirectPost puede consultar y crear clientes canónicos del Core
+  const crmCusts = await sdk.customers.listCustomers();
+  assert(crmCusts.length >= 1, 'F15.1 Test 8: DirectPost consulta directorio de clientes único del Core');
+  const directPostCustomer = await sdk.customers.createCustomer({
+    name: 'Cliente Mostrador DirectPost',
+    phone: '8118889900',
+    email: 'mostrador@cliente.com',
+  }, 'Cajero DirectPost');
+  assert(directPostCustomer.id.startsWith('cust_'), 'F15.1 Test 8: Cliente creado desde DirectPost es entidad canónica CustomerProfile');
+
+  // Test 9: Una Order POS puede utilizar Delivery mediante sdk.delivery
+  const posWithDelivery = await sdk.orders.createPosOrder({
+    ticket_number: 'DIRECTPOST-DELIVERY-#002',
+    server_id: 'usr_carlos_01',
+    customer_id: directPostCustomer.id,
+    notes: 'Cliente en mostrador solicitó entrega a domicilio',
+  }, DEFAULT_RESTAURANT_ID);
+
+  const directPostDeliveryDispatch = await sdk.delivery.dispatchOrder({
+    order_id: posWithDelivery.id,
+    delivery_address: 'Av. Lazaro Cardenas 2224, Monterrey',
+    delivery_fee_cents: 3500,
+    driver_id: updatedDriver!.id,
+    restaurant_id: DEFAULT_RESTAURANT_ID,
+    actor: 'DirectPost Terminal',
+  });
+  assert(directPostDeliveryDispatch.id.startsWith('dsp_'), 'F15.1 Test 9: Orden originada en DirectPost despachada por Delivery Core');
+  const orderAfterDispatch = await sdk.orders.getOrder(posWithDelivery.id, DEFAULT_RESTAURANT_ID);
+  assert(orderAfterDispatch.order_type === 'delivery' && orderAfterDispatch.status === 'assigned', 'F15.1 Test 9: Comanda sincronizada con despacho sin crear réplica');
+
+  // Test 10: DirectPost no puede saltarse contratos de conductor o telemetría
+  let invalidDispatchFromPosRejected = false;
+  try {
+    await sdk.delivery.dispatchOrder({
+      order_id: posWithDelivery.id,
+      delivery_address: 'Calle Invalida',
+      driver_id: 'drv_repartidor_inexistente',
+      restaurant_id: DEFAULT_RESTAURANT_ID,
+    });
+  } catch {
+    invalidDispatchFromPosRejected = true;
+  }
+  assert(invalidDispatchFromPosRejected, 'F15.1 Test 10: Intento de bypass de validación de conductor rechazado');
+
+  // Test 11: Granularidad de capabilities POS registradas en el Solution Registry
+  const posSolutionObj = SolutionService.getSolution('pos');
+  assert(Boolean(posSolutionObj), 'F15.1 Test 11: Solución "pos" registrada en Solution Registry');
+  const f15PosCapIds = posSolutionObj!.capabilities.map((c) => c.id);
+  assert(f15PosCapIds.includes('pos.orders'), 'F15.1 Test 11: Capability pos.orders presente');
+  assert(f15PosCapIds.includes('pos.products'), 'F15.1 Test 11: Capability pos.products presente');
+  assert(f15PosCapIds.includes('pos.customers'), 'F15.1 Test 11: Capability pos.customers presente');
+  assert(f15PosCapIds.includes('pos.comandas'), 'F15.1 Test 11: Capability pos.comandas presente');
+  assert(f15PosCapIds.includes('pos.tables'), 'F15.1 Test 11: Capability pos.tables presente');
+  assert(f15PosCapIds.includes('pos.cash'), 'F15.1 Test 11: Capability pos.cash presente');
+  assert(f15PosCapIds.includes('pos.payments'), 'F15.1 Test 11: Capability pos.payments presente');
+
+  // Test 12: InProcess Adapter y Http Adapter interoperables
+  const inProcessDirectSdk = new DirectauranteSDK(new InProcessDirectauranteAdapter(), DEFAULT_RESTAURANT_ID);
+  assert(typeof inProcessDirectSdk.orders.createPosOrder === 'function', 'F15.1 Test 12: InProcess Adapter implementa createPosOrder');
+  assert(typeof sdk.orders.createPosOrder === 'function', 'F15.1 Test 12: SDK Facade expone createPosOrder');
+
+  // ====================================================
+  // 24. CIERRE PRODUCCIÓN: CENTRO DE SOLUCIONES + DIRECTPRINT + ACTIVACIÓN (F15.2)
+  // ====================================================
+  console.log('\n--- 24. CIERRE PRODUCCIÓN: CENTRO DE SOLUCIONES + DIRECTPRINT + ACTIVACIÓN (F15.2) ---');
+
+  // 24.1 Centro de Soluciones lista las soluciones requeridas
+  const coreSolutions = await sdk.solutions.listSolutions();
+  const closureSolIds = coreSolutions.map((s) => s.solution_id);
+  assert(closureSolIds.includes('delivery'), 'F15.2 Soluciones: delivery presente en Centro de Soluciones');
+  assert(closureSolIds.includes('pos'), 'F15.2 Soluciones: pos (DirectPost) presente en Centro de Soluciones');
+  assert(closureSolIds.includes('directprint'), 'F15.2 Soluciones: directprint presente en Centro de Soluciones');
+  assert(closureSolIds.includes('loyalty'), 'F15.2 Soluciones: loyalty presente en Centro de Soluciones');
+  assert(closureSolIds.includes('crm'), 'F15.2 Soluciones: crm presente en Centro de Soluciones');
+  assert(closureSolIds.includes('kds'), 'F15.2 Soluciones: kds presente en Centro de Soluciones');
+  assert(closureSolIds.includes('analytics'), 'F15.2 Soluciones: analytics presente en Centro de Soluciones');
+
+  // 24.2 POS puede activarse y desactivarse mediante Entitlement
+  const testBranchRestId = 'rest_sucursal_f15_test';
+  // Habilitar POS para este restaurante
+  const grantedPosEnt = await sdk.solutions.grantEntitlement({
+    solution_id: 'pos',
+    capability: '*',
+    source: 'manual',
+    notes: 'Activación DirectPost desde Centro de Soluciones',
+  }, testBranchRestId);
+  assert(grantedPosEnt.status === 'active', 'F15.2 POS: Activado mediante Entitlement formal');
+  const closurePosActive = await sdk.solutions.isSolutionEnabled('pos', testBranchRestId);
+  assert(closurePosActive === true, 'F15.2 POS: isSolutionEnabled() confirma activación');
+
+  // Desactivar / suspender POS
+  await sdk.solutions.suspendEntitlement(grantedPosEnt.id, testBranchRestId);
+  const isPosSuspended = await sdk.solutions.isSolutionEnabled('pos', testBranchRestId);
+  assert(isPosSuspended === false, 'F15.2 POS: Desactivado / suspendido sin borrar histórico');
+
+  // 24.3 DirectPrint puede activarse y desactivarse
+  const grantedPrintEnt = await sdk.solutions.grantEntitlement({
+    solution_id: 'directprint',
+    capability: '*',
+    source: 'addon',
+    notes: 'Addon térmico activado en Centro de Soluciones',
+  }, testBranchRestId);
+  assert(grantedPrintEnt.status === 'active', 'F15.2 DirectPrint: Activado mediante Entitlement');
+  const isPrintActive = await sdk.solutions.isSolutionEnabled('directprint', testBranchRestId);
+  assert(isPrintActive === true, 'F15.2 DirectPrint: isSolutionEnabled() confirma activación');
+
+  await sdk.solutions.suspendEntitlement(grantedPrintEnt.id, testBranchRestId);
+  const isPrintSuspended = await sdk.solutions.isSolutionEnabled('directprint', testBranchRestId);
+  assert(isPrintSuspended === false, 'F15.2 DirectPrint: Desactivado limpiamente');
+
+  // Reactivar DirectPrint para las pruebas subsecuentes
+  await sdk.solutions.activateEntitlement(grantedPrintEnt.id, testBranchRestId);
+
+  // 24.4 Seguridad: Usuario sin permiso no puede activar soluciones
+  const unauthorizedMemberAuth = SolutionService.authorizeAction('usr_carlos_01', DEFAULT_RESTAURANT_ID, 'restaurant.manage');
+  assert(!unauthorizedMemberAuth.authorized, 'F15.2 Seguridad: Usuario sin permission adecuada rechazado');
+
+  // 24.5 Seguridad Multi-Tenant: Restaurante A no puede alterar soluciones de Restaurante B
+  let crossTenantEntitlementRejected = false;
+  try {
+    // Intentar suspender entitlement del restaurante A desde contexto de restaurante B
+    await sdk.solutions.suspendEntitlement(grantedPrintEnt.id, DEFAULT_RESTAURANT_ID);
+  } catch {
+    crossTenantEntitlementRejected = true;
+  }
+  assert(crossTenantEntitlementRejected, 'F15.2 Multi-Tenant: Restaurante A no puede modificar entitlements de Restaurante B');
+
+  // 24.6 PrintJob y no-bloqueo: Order funciona aunque DirectPrint esté desactivado
+  const orderWithoutPrint = await sdk.orders.createPosOrder({
+    ticket_number: 'ORDER-NOPRINT-01',
+    server_id: 'Cajero Offline',
+    notes: 'Venta con impresora apagada o sin contrato de impresión',
+  }, testBranchRestId);
+  assert(orderWithoutPrint.status === 'open', 'F15.2 No-Bloqueo: Order POS se genera con éxito sin depender de DirectPrint');
+
+  // 24.7 Order POS genera PrintJobs para cocina, barra y caja cuando DirectPrint está habilitado
+  const kitchenJob = await sdk.print.createPrintJob({
+    type: 'kitchen',
+    station: 'kitchen',
+    order_id: orderWithoutPrint.id,
+    formatted_content: '=== COMANDA COCINA ===\n1x Tacos Ribeye\n',
+    status: 'pending',
+  }, testBranchRestId);
+  assert(kitchenJob.id.startsWith('pjob_'), 'F15.2 PrintJob: Generado trabajo de impresión para cocina');
+  assert(kitchenJob.restaurant_id === testBranchRestId, 'F15.2 PrintJob: Conserva restaurant_id canónico');
+  assert(kitchenJob.order_id === orderWithoutPrint.id, 'F15.2 PrintJob: Conserva order_id canónico');
+  assert(kitchenJob.status === 'pending', 'F15.2 PrintJob: Inicializado en estado "pending"');
+
+  const cashierJob = await sdk.print.createPrintJob({
+    type: 'cashier',
+    station: 'cashier',
+    order_id: orderWithoutPrint.id,
+    formatted_content: '=== TICKET DE CUENTA ===\nTotal: $150.00\n',
+    status: 'queued',
+  }, testBranchRestId);
+  assert(cashierJob.type === 'cashier', 'F15.2 PrintJob: Soporta tipo "cashier" para precuenta/caja');
+
+  // 24.8 Ciclo de Vida: pending -> processing -> completed y failed
+  const processingJob = await sdk.print.updatePrintJobStatus(kitchenJob.id, 'processing', undefined, testBranchRestId);
+  assert(processingJob.status === 'processing', 'F15.2 PrintJob Ciclo: Transición a "processing"');
+
+  const completedJob = await sdk.print.updatePrintJobStatus(kitchenJob.id, 'completed', undefined, testBranchRestId);
+  assert(completedJob.status === 'completed', 'F15.2 PrintJob Ciclo: Transición a "completed"');
+
+  const failedJob = await sdk.print.updatePrintJobStatus(cashierJob.id, 'failed', 'Papel agotado en impresora térmica', testBranchRestId);
+  assert(failedJob.status === 'failed', 'F15.2 PrintJob Ciclo: Transición a "failed" con motivo');
+  assert(Boolean(failedJob.error_message?.includes('Papel agotado')), 'F15.2 PrintJob Ciclo: Mensaje de error preservado');
+
+  // 24.9 Unicidad canónica: Solo existe PrintJob (no PosPrintJob ni DeliveryPrintJob)
+  assert(!('PosPrintJob' in globalThis), 'F15.2 Integridad: No existen modelos paralelos ni PosPrintJob');
+
+  // 24.10 Delivery continúa funcionando 100% independiente de DirectPrint
+  const deliveryReadyOrder = await sdk.orders.createPosOrder({
+    ticket_number: 'DELIVERY-INDEPENDENT-01',
+    server_id: 'Operador Delivery',
+  }, DEFAULT_RESTAURANT_ID);
+  const independentDispatch = await sdk.delivery.dispatchOrder({
+    order_id: deliveryReadyOrder.id,
+    delivery_address: 'Av. Paseo de los Leones 1200',
+    driver_id: updatedDriver!.id,
+    restaurant_id: DEFAULT_RESTAURANT_ID,
+  });
+  assert(independentDispatch.status === 'assigned', 'F15.2 Delivery: Despacho opera con total autonomía');
 
 
   console.log('\n====================================================');

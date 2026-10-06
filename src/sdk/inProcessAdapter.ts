@@ -7,6 +7,7 @@ import { DirectauranteSdkAdapter } from './adapter';
 import {
   GuestSubaccount,
   Product,
+  Order,
   OrderItem,
   OrderItemStatus,
   TableBill,
@@ -23,6 +24,22 @@ import {
   DEFAULT_RESTAURANT_ID,
   Permission,
   EntitlementSource,
+  RestaurantSettlement,
+  DriverSettlement,
+  DriverProfile,
+  DeliveryDispatch,
+  OperatingPnL,
+  ZCutReport,
+  PaymentMethod,
+  PaymentStatus,
+  Solution,
+  Capability,
+  CommercialPlan,
+  Entitlement,
+  EntitlementCheckResult,
+  ActionAuthorizationResult,
+  PrintJob,
+  Printer,
 } from '../core/types';
 import { PosService } from '../modules/pos/posService';
 import { KdsService } from '../modules/kds/kdsService';
@@ -34,6 +51,8 @@ import { StaffService } from '../modules/staff/staffService';
 import { CrmService } from '../modules/crm/crmService';
 import { FinanceService } from '../modules/finance/financeService';
 import { SolutionService } from '../modules/solutions/solutionService';
+import { DeliveryService } from '../modules/delivery/deliveryService';
+import { PrintService } from '../modules/directprint/printService';
 import type {
   RecordPaymentInput,
   RefundPaymentInput,
@@ -112,9 +131,55 @@ export class InProcessDirectauranteAdapter implements DirectauranteSdkAdapter {
     return PosService.createOrderTicket(tableIdOrSessionId, waiterName, notes, restaurantId);
   }
 
+  async createPosOrder(
+    data: {
+      server_id?: string;
+      customer_id?: string;
+      notes?: string;
+      ticket_number?: string;
+      table_id?: string;
+      table_session_id?: string;
+    },
+    restaurantId: string = DEFAULT_RESTAURANT_ID
+  ) {
+    return PosService.createDirectPostOrder({
+      ...data,
+      restaurant_id: restaurantId,
+    });
+  }
+
   async getSessionOrders(tableIdOrSessionId: string, restaurantId: string = DEFAULT_RESTAURANT_ID) {
     const details = PosService.getTableDetails(tableIdOrSessionId, restaurantId);
     return details.orders || [];
+  }
+
+  async getOrder(orderId: string, restaurantId: string = DEFAULT_RESTAURANT_ID) {
+    const orders = db.get('orders');
+    const order = orders.find((o) => o.id === orderId && o.restaurant_id === restaurantId);
+    if (!order) {
+      throw new Error(`Orden ${orderId} no encontrada.`);
+    }
+    const items = db.get('order_items').filter((i) => i.order_id === order.id);
+    return { ...order, items };
+  }
+
+  async updateOrderStatus(
+    orderId: string,
+    status: Order['status'],
+    actor: string = 'Operador',
+    reason?: string,
+    restaurantId: string = DEFAULT_RESTAURANT_ID
+  ) {
+    return PosService.updateOrderStatus(orderId, status, actor, reason, restaurantId);
+  }
+
+  async cancelOrder(
+    orderId: string,
+    reason?: string,
+    actor: string = 'Operador',
+    restaurantId: string = DEFAULT_RESTAURANT_ID
+  ) {
+    return PosService.cancelOrder(orderId, reason, actor, restaurantId);
   }
 
   async addOrderItem(
@@ -470,7 +535,7 @@ export class InProcessDirectauranteAdapter implements DirectauranteSdkAdapter {
     return PurchaseService.updatePurchaseOrder(orderId, data, actor, restaurantId);
   }
 
-  async updateOrderStatus(orderId: string, status: any, actor: string = 'Administrador', restaurantId: string = DEFAULT_RESTAURANT_ID) {
+  async updatePurchaseOrderStatus(orderId: string, status: any, actor: string = 'Administrador', restaurantId: string = DEFAULT_RESTAURANT_ID) {
     return PurchaseService.updateOrderStatus(orderId, status, actor, restaurantId);
   }
 
@@ -810,5 +875,88 @@ export class InProcessDirectauranteAdapter implements DirectauranteSdkAdapter {
     restaurantId: string = DEFAULT_RESTAURANT_ID
   ) {
     return SolutionService.authorizeAction(userId, restaurantId, permission, capability);
+  }
+
+  // ==========================================
+  // DELIVERY & DISPATCH METHODS (Core F14.1)
+  // ==========================================
+
+  async listDrivers(
+    restaurantId: string = DEFAULT_RESTAURANT_ID,
+    filters?: { status?: DriverProfile['status']; is_verified?: boolean }
+  ) {
+    return DeliveryService.listDrivers(restaurantId, filters);
+  }
+
+  async getDriver(driverId: string, restaurantId: string = DEFAULT_RESTAURANT_ID) {
+    return DeliveryService.getDriver(driverId, restaurantId);
+  }
+
+  async createDriver(data: any, actor: string = 'System Admin', _restaurantId: string = DEFAULT_RESTAURANT_ID) {
+    return DeliveryService.createDriver(data, actor);
+  }
+
+  async verifyDriver(
+    driverId: string,
+    isVerified: boolean,
+    actor: string = 'Admin',
+    restaurantId: string = DEFAULT_RESTAURANT_ID
+  ) {
+    return DeliveryService.verifyDriver(driverId, isVerified, actor, restaurantId);
+  }
+
+  async updateDriverGps(
+    driverId: string,
+    gps: { latitude: number; longitude: number },
+    restaurantId: string = DEFAULT_RESTAURANT_ID
+  ) {
+    return DeliveryService.updateDriverGps(driverId, gps, restaurantId);
+  }
+
+  async findEligibleDrivers(restaurantId: string = DEFAULT_RESTAURANT_ID, maxGpsAgeMinutes: number = 30) {
+    return DeliveryService.findEligibleDrivers(restaurantId, maxGpsAgeMinutes);
+  }
+
+  async dispatchOrder(data: any) {
+    return DeliveryService.dispatchOrder(data);
+  }
+
+  async markDelivered(dispatchId: string, actor: string = 'Driver', restaurantId: string = DEFAULT_RESTAURANT_ID) {
+    return DeliveryService.markDelivered(dispatchId, actor, restaurantId);
+  }
+
+  async listDispatches(
+    restaurantId: string = DEFAULT_RESTAURANT_ID,
+    filters?: { status?: DeliveryDispatch['status']; driver_id?: string; order_id?: string }
+  ) {
+    return DeliveryService.listDispatches(restaurantId, filters);
+  }
+
+  // ==========================================
+  // DIRECTPRINT METHODS (Core F15.2)
+  // ==========================================
+
+  async listPrintJobs(
+    restaurantId: string = DEFAULT_RESTAURANT_ID,
+    filters?: { status?: string; printer_id?: string; station?: string }
+  ) {
+    return PrintService.listPrintJobs(restaurantId, filters);
+  }
+
+  async createPrintJob(params: any, restaurantId: string = DEFAULT_RESTAURANT_ID) {
+    return PrintService.createPrintJob(params, restaurantId);
+  }
+
+  async updatePrintJobStatus(
+    jobId: string,
+    status: PrintJob['status'],
+    errorMessage?: string,
+    restaurantId: string = DEFAULT_RESTAURANT_ID
+  ) {
+    return PrintService.updatePrintJobStatus(jobId, status, errorMessage, restaurantId);
+  }
+
+  async listPrinters(restaurantId: string = DEFAULT_RESTAURANT_ID) {
+    return PrintService.getPrinters(restaurantId);
   }
 }

@@ -740,8 +740,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({ onBack, initialTab = '
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 text-zinc-800">
-                {expenses.map((e) => (
-                  <tr key={e.id} className="hover:bg-zinc-50/50">
+                {expenses.map((e, idx) => (
+                  <tr key={`${e.id}_${idx}`} className="hover:bg-zinc-50/50">
                     <td className="px-5 py-3 text-xs text-[#667085]">
                       {new Date(e.created_at).toLocaleDateString('es-MX')}
                     </td>
@@ -790,8 +790,8 @@ export const FinanceView: React.FC<FinanceViewProps> = ({ onBack, initialTab = '
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100 text-zinc-800">
-                {ledger.map((mov) => (
-                  <tr key={mov.id} className="hover:bg-zinc-50/50">
+                {ledger.map((mov, idx) => (
+                  <tr key={`${mov.id}_${idx}`} className="hover:bg-zinc-50/50">
                     <td className="px-5 py-3 font-mono text-xs text-[#667085]">
                       {new Date(mov.created_at).toLocaleString('es-MX')}
                     </td>

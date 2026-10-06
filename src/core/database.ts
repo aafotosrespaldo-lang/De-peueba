@@ -49,6 +49,8 @@ import {
   FinancialMovement,
   RestaurantSettlement,
   DriverSettlement,
+  DriverProfile,
+  DeliveryDispatch,
   Solution,
   CommercialPlan,
   Entitlement,
@@ -95,6 +97,8 @@ export interface DatabaseSchema {
   financial_movements: FinancialMovement[];
   restaurant_settlements: RestaurantSettlement[];
   driver_settlements: DriverSettlement[];
+  drivers: DriverProfile[];
+  delivery_dispatches: DeliveryDispatch[];
   solutions: Solution[];
   commercial_plans: CommercialPlan[];
   entitlements: Entitlement[];
@@ -2020,6 +2024,24 @@ export function getDefaultSeedData(): DatabaseSchema {
         created_at: now,
       },
     ],
+    drivers: [
+      {
+        id: 'drv_pedro_01',
+        restaurant_id: INITIAL_RESTAURANT_ID,
+        name: 'Pedro Repartidor',
+        phone: '8112345678',
+        email: 'pedro.driver@directaurante.mx',
+        vehicle_type: 'motorcycle',
+        license_plate: 'NL-MOT-441',
+        is_verified: true,
+        status: 'available',
+        current_latitude: 25.6866,
+        current_longitude: -100.3161,
+        last_gps_at: now,
+        created_at: now,
+      },
+    ],
+    delivery_dispatches: [],
     solutions: [
       {
         solution_id: 'delivery',
@@ -2081,15 +2103,43 @@ export function getDefaultSeedData(): DatabaseSchema {
           },
           {
             id: 'pos.orders',
-            name: 'Comandero de Salón',
-            description: 'Toma rápida de comandas en sala y barra',
+            name: 'Comandero de Salón y Ventas DirectPost',
+            description: 'Toma rápida de comandas en sala, mostrador y barra',
             solution_id: 'pos',
             required_permissions: ['orders.create', 'orders.view'],
+          },
+          {
+            id: 'pos.products',
+            name: 'Catálogo POS y Modificadores',
+            description: 'Consulta y selección de productos, variantes y extras para venta',
+            solution_id: 'pos',
+            required_permissions: ['orders.create'],
+          },
+          {
+            id: 'pos.customers',
+            name: 'Identificación de Clientes POS',
+            description: 'Búsqueda e integración de clientes y direcciones en venta presencial',
+            solution_id: 'pos',
+            required_permissions: ['customers.view'],
+          },
+          {
+            id: 'pos.comandas',
+            name: 'Gestión de Comandas',
+            description: 'Control de tickets de comanda y estado de preparación',
+            solution_id: 'pos',
+            required_permissions: ['orders.view', 'orders.update'],
           },
           {
             id: 'pos.split_payment',
             name: 'Pago Dividido',
             description: 'Cuentas separadas por comensal o montos parciales',
+            solution_id: 'pos',
+            required_permissions: ['payments.create'],
+          },
+          {
+            id: 'pos.payments',
+            name: 'Cobro y Liquidación de Venta',
+            description: 'Recepción de pagos en efectivo, tarjeta y transferencias en mostrador/mesa',
             solution_id: 'pos',
             required_permissions: ['payments.create'],
           },
@@ -2101,6 +2151,13 @@ export function getDefaultSeedData(): DatabaseSchema {
             required_permissions: ['cash.open', 'cash.close', 'cash.view'],
           },
           {
+            id: 'pos.cash',
+            name: 'Control de Efectivo POS',
+            description: 'Movimientos de entrada y salida de efectivo de turno',
+            solution_id: 'pos',
+            required_permissions: ['cash.view', 'cash.open'],
+          },
+          {
             id: 'pos.subaccounts',
             name: 'Subcuentas por Comensal',
             description: 'Cuentas independientes por asiento con consolidación',
@@ -2108,7 +2165,7 @@ export function getDefaultSeedData(): DatabaseSchema {
             required_permissions: ['orders.update'],
           },
         ],
-        required_permissions: ['tables.view', 'tables.manage', 'orders.create', 'payments.create', 'cash.view'],
+        required_permissions: ['tables.view', 'tables.manage', 'orders.create', 'orders.view', 'payments.create', 'cash.view', 'customers.view'],
         commercial_availability: 'available',
         icon: 'UtensilsCrossed',
       },
@@ -2121,6 +2178,13 @@ export function getDefaultSeedData(): DatabaseSchema {
         category: 'hardware',
         dependencies: [],
         capabilities: [
+          {
+            id: 'print.jobs',
+            name: 'Gestor de Trabajos de Impresión',
+            description: 'Encolado, estado (queued, processing, completed, failed) y reintentos de PrintJobs',
+            solution_id: 'directprint',
+            required_permissions: ['orders.view'],
+          },
           {
             id: 'print.order',
             name: 'Impresión de Comanda',
@@ -2136,9 +2200,23 @@ export function getDefaultSeedData(): DatabaseSchema {
             required_permissions: ['orders.view'],
           },
           {
+            id: 'print.bar_ticket',
+            name: 'Ticket de Barra y Bebidas',
+            description: 'Ruteo de coctelería y bebidas a impresora de barra',
+            solution_id: 'directprint',
+            required_permissions: ['orders.view'],
+          },
+          {
             id: 'print.cashier_ticket',
             name: 'Ticket de Caja y Pre-cuenta',
-            description: 'Emisión de pre-cuenta y recibo oficial de cobro',
+            description: 'Emisión de pre-cuenta y corte de cuenta para cobro',
+            solution_id: 'directprint',
+            required_permissions: ['payments.view'],
+          },
+          {
+            id: 'print.customer_ticket',
+            name: 'Ticket de Comensal / Recibo',
+            description: 'Comprobante impreso de consumo para cliente',
             solution_id: 'directprint',
             required_permissions: ['payments.view'],
           },
@@ -2586,6 +2664,12 @@ class DatabaseManager {
             parsed.driver_settlements && parsed.driver_settlements.length > 0
               ? parsed.driver_settlements
               : defaultData.driver_settlements,
+          drivers:
+            parsed.drivers && parsed.drivers.length > 0
+              ? parsed.drivers
+              : defaultData.drivers,
+          delivery_dispatches: parsed.delivery_dispatches || [],
+          print_jobs: parsed.print_jobs || [],
           solutions:
             parsed.solutions && parsed.solutions.length > 0
               ? parsed.solutions

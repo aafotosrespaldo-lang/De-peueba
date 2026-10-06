@@ -33,6 +33,8 @@ import {
   FinancialMovement,
   RestaurantSettlement,
   DriverSettlement,
+  DriverProfile,
+  DeliveryDispatch,
   OperatingPnL,
   ZCutReport,
   PaymentMethod,
@@ -41,6 +43,8 @@ import {
   Capability,
   CommercialPlan,
   Entitlement,
+  Printer,
+  PrintJob,
   EntitlementCheckResult,
   ActionAuthorizationResult,
   SolutionStatus,
@@ -94,6 +98,17 @@ export interface DirectauranteSdkAdapter {
     notes?: string,
     restaurantId?: string
   ): Promise<Order>;
+  createPosOrder(
+    data: {
+      server_id?: string;
+      customer_id?: string;
+      notes?: string;
+      ticket_number?: string;
+      table_id?: string;
+      table_session_id?: string;
+    },
+    restaurantId?: string
+  ): Promise<Order>;
   getSessionOrders(tableIdOrSessionId: string, restaurantId?: string): Promise<Order[]>;
   addOrderItem(
     tableIdOrSessionId: string,
@@ -107,6 +122,15 @@ export interface DirectauranteSdkAdapter {
     orderTicketId?: string,
     modifiers?: string[]
   ): Promise<any>;
+  getOrder(orderId: string, restaurantId?: string): Promise<Order & { items: OrderItem[] }>;
+  updateOrderStatus(
+    orderId: string,
+    status: Order['status'],
+    actor?: string,
+    reason?: string,
+    restaurantId?: string
+  ): Promise<Order>;
+  cancelOrder(orderId: string, reason?: string, actor?: string, restaurantId?: string): Promise<Order>;
   updateOrderItemStatus(
     itemId: string,
     status: OrderItemStatus,
@@ -251,7 +275,7 @@ export interface DirectauranteSdkAdapter {
   getPurchaseOrder(orderId: string, restaurantId?: string): Promise<any>;
   createPurchaseOrder(data: any, actor?: string, restaurantId?: string): Promise<any>;
   updatePurchaseOrder(orderId: string, data: any, actor?: string, restaurantId?: string): Promise<any>;
-  updateOrderStatus(orderId: string, status: any, actor?: string, restaurantId?: string): Promise<any>;
+  updatePurchaseOrderStatus(orderId: string, status: any, actor?: string, restaurantId?: string): Promise<any>;
   receivePurchaseOrder(orderId: string, receiptData: any, actor?: string, restaurantId?: string): Promise<any>;
   getPriceHistory(itemId?: string, restaurantId?: string): Promise<any[]>;
   getPurchaseSummary(restaurantId?: string): Promise<any>;
@@ -351,6 +375,23 @@ export interface DirectauranteSdkAdapter {
     capability?: string,
     restaurantId?: string
   ): Promise<ActionAuthorizationResult>;
+
+  // Delivery & Dispatch Core (FASE 14 / F14.1)
+  listDrivers(restaurantId?: string, filters?: { status?: DriverProfile['status']; is_verified?: boolean }): Promise<DriverProfile[]>;
+  getDriver(driverId: string, restaurantId?: string): Promise<DriverProfile | null>;
+  createDriver(data: any, actor?: string, restaurantId?: string): Promise<DriverProfile>;
+  verifyDriver(driverId: string, isVerified: boolean, actor?: string, restaurantId?: string): Promise<DriverProfile>;
+  updateDriverGps(driverId: string, gps: { latitude: number; longitude: number }, restaurantId?: string): Promise<DriverProfile>;
+  findEligibleDrivers(restaurantId?: string, maxGpsAgeMinutes?: number): Promise<DriverProfile[]>;
+  dispatchOrder(data: any): Promise<DeliveryDispatch>;
+  markDelivered(dispatchId: string, actor?: string, restaurantId?: string): Promise<DeliveryDispatch>;
+  listDispatches(restaurantId?: string, filters?: { status?: DeliveryDispatch['status']; driver_id?: string; order_id?: string }): Promise<DeliveryDispatch[]>;
+
+  // DirectPrint ESC/POS (Core F14 / F15.2)
+  listPrintJobs(restaurantId?: string, filters?: { status?: string; printer_id?: string; station?: string }): Promise<PrintJob[]>;
+  createPrintJob(params: any, restaurantId?: string): Promise<PrintJob>;
+  updatePrintJobStatus(jobId: string, status: PrintJob['status'], errorMessage?: string, restaurantId?: string): Promise<PrintJob>;
+  listPrinters(restaurantId?: string): Promise<Printer[]>;
 }
 
 /**
@@ -444,9 +485,51 @@ export class HttpDirectauranteAdapter implements DirectauranteSdkAdapter {
     return data.ticket;
   }
 
+  async createPosOrder(
+    data: {
+      server_id?: string;
+      customer_id?: string;
+      notes?: string;
+      ticket_number?: string;
+      table_id?: string;
+      table_session_id?: string;
+    },
+    restaurantId?: string
+  ) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ order: Order }>(`/api/pos/orders${qs}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...data, restaurant_id: restaurantId }),
+    });
+    return res.order;
+  }
+
   async getSessionOrders(tableIdOrSessionId: string) {
     const details = await this.getTable(tableIdOrSessionId);
     return details.orders || [];
+  }
+
+  async getOrder(orderId: string, _restaurantId?: string) {
+    const data = await this.request<{ order: Order & { items: OrderItem[] } }>(`/api/pos/orders/${orderId}`);
+    return data.order;
+  }
+
+  async updateOrderStatus(orderId: string, status: Order['status'], actor?: string, reason?: string) {
+    const data = await this.request<{ order: Order }>(`/api/pos/orders/${orderId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, actor, reason }),
+    });
+    return data.order;
+  }
+
+  async cancelOrder(orderId: string, reason?: string, actor?: string) {
+    const data = await this.request<{ order: Order }>(`/api/pos/orders/${orderId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, actor }),
+    });
+    return data.order;
   }
 
   async addOrderItem(
@@ -880,7 +963,7 @@ export class HttpDirectauranteAdapter implements DirectauranteSdkAdapter {
     return data.order;
   }
 
-  async updateOrderStatus(orderId: string, status: any, actor?: string, restaurantId?: string) {
+  async updatePurchaseOrderStatus(orderId: string, status: any, actor?: string, restaurantId?: string) {
     const data = await this.request<{ order: any }>(`/api/purchases/orders/${orderId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status, actor, restaurant_id: restaurantId }),
@@ -1149,14 +1232,16 @@ export class HttpDirectauranteAdapter implements DirectauranteSdkAdapter {
   async getCustomerOrders(customerId: string, restaurantId?: string) {
     const params = new URLSearchParams();
     if (restaurantId) params.append('restaurant_id', restaurantId);
-    const data = await this.request<{ orders: any[] }>(`/api/customers/${customerId}/orders?${params.toString()}`);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const data = await this.request<{ orders: any[] }>(`/api/customers/${encodeURIComponent(customerId)}/orders${qs}`);
     return data.orders || [];
   }
 
   async getCustomerMetrics(customerId: string, restaurantId?: string) {
     const params = new URLSearchParams();
     if (restaurantId) params.append('restaurant_id', restaurantId);
-    const data = await this.request<{ metrics: any }>(`/api/customers/${customerId}/metrics?${params.toString()}`);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const data = await this.request<{ metrics: any }>(`/api/customers/${encodeURIComponent(customerId)}/metrics${qs}`);
     return data.metrics;
   }
 
@@ -1536,6 +1621,131 @@ export class HttpDirectauranteAdapter implements DirectauranteSdkAdapter {
       }),
     });
     return res;
+  }
+
+  // ==========================================
+  // DELIVERY & DISPATCH HTTP METHODS (Core F14.1)
+  // ==========================================
+
+  async listDrivers(restaurantId?: string, filters?: { status?: DriverProfile['status']; is_verified?: boolean }) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.is_verified !== undefined) params.append('is_verified', String(filters.is_verified));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ drivers: DriverProfile[] }>(`/api/delivery/drivers${qs}`);
+    return res.drivers || [];
+  }
+
+  async getDriver(driverId: string, restaurantId?: string) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ driver: DriverProfile }>(`/api/delivery/drivers/${encodeURIComponent(driverId)}${qs}`);
+    return res.driver || null;
+  }
+
+  async createDriver(data: any, actor?: string, _restaurantId?: string) {
+    const res = await this.request<{ driver: DriverProfile }>(`/api/delivery/drivers`, {
+      method: 'POST',
+      headers: actor ? { 'x-actor-name': actor } : {},
+      body: JSON.stringify(data),
+    });
+    return res.driver;
+  }
+
+  async verifyDriver(driverId: string, isVerified: boolean, actor?: string, restaurantId?: string) {
+    const res = await this.request<{ driver: DriverProfile }>(`/api/delivery/drivers/${encodeURIComponent(driverId)}/verify`, {
+      method: 'PATCH',
+      headers: actor ? { 'x-actor-name': actor } : {},
+      body: JSON.stringify({ is_verified: isVerified, restaurant_id: restaurantId }),
+    });
+    return res.driver;
+  }
+
+  async updateDriverGps(driverId: string, gps: { latitude: number; longitude: number }, restaurantId?: string) {
+    const res = await this.request<{ driver: DriverProfile }>(`/api/delivery/drivers/${encodeURIComponent(driverId)}/gps`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...gps, restaurant_id: restaurantId }),
+    });
+    return res.driver;
+  }
+
+  async findEligibleDrivers(restaurantId?: string, maxGpsAgeMinutes?: number) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    if (maxGpsAgeMinutes) params.append('max_gps_age_minutes', String(maxGpsAgeMinutes));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ drivers: DriverProfile[] }>(`/api/delivery/eligible-drivers${qs}`);
+    return res.drivers || [];
+  }
+
+  async dispatchOrder(data: any) {
+    const res = await this.request<{ dispatch: DeliveryDispatch }>(`/api/delivery/dispatch`, {
+      method: 'POST',
+      headers: data.actor ? { 'x-actor-name': data.actor } : {},
+      body: JSON.stringify(data),
+    });
+    return res.dispatch;
+  }
+
+  async markDelivered(dispatchId: string, actor?: string, restaurantId?: string) {
+    const res = await this.request<{ dispatch: DeliveryDispatch }>(`/api/delivery/dispatches/${encodeURIComponent(dispatchId)}/deliver`, {
+      method: 'POST',
+      headers: actor ? { 'x-actor-name': actor } : {},
+      body: JSON.stringify({ restaurant_id: restaurantId }),
+    });
+    return res.dispatch;
+  }
+
+  async listDispatches(restaurantId?: string, filters?: { status?: DeliveryDispatch['status']; driver_id?: string; order_id?: string }) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.driver_id) params.append('driver_id', filters.driver_id);
+    if (filters?.order_id) params.append('order_id', filters.order_id);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ dispatches: DeliveryDispatch[] }>(`/api/delivery/dispatches${qs}`);
+    return res.dispatches || [];
+  }
+
+  // ==========================================
+  // DIRECTPRINT HTTP METHODS (Core F15.2)
+  // ==========================================
+
+  async listPrintJobs(restaurantId?: string, filters?: { status?: string; printer_id?: string; station?: string }) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.printer_id) params.append('printer_id', filters.printer_id);
+    if (filters?.station) params.append('station', filters.station);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ print_jobs: PrintJob[] }>(`/api/print/jobs${qs}`);
+    return res.print_jobs || [];
+  }
+
+  async createPrintJob(params: any, restaurantId?: string) {
+    const res = await this.request<{ print_job: PrintJob }>(`/api/print/jobs`, {
+      method: 'POST',
+      body: JSON.stringify({ ...params, restaurant_id: restaurantId }),
+    });
+    return res.print_job;
+  }
+
+  async updatePrintJobStatus(jobId: string, status: PrintJob['status'], errorMessage?: string, restaurantId?: string) {
+    const res = await this.request<{ print_job: PrintJob }>(`/api/print/jobs/${encodeURIComponent(jobId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, error_message: errorMessage, restaurant_id: restaurantId }),
+    });
+    return res.print_job;
+  }
+
+  async listPrinters(restaurantId?: string) {
+    const params = new URLSearchParams();
+    if (restaurantId) params.append('restaurant_id', restaurantId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request<{ printers: Printer[] }>(`/api/print/printers${qs}`);
+    return res.printers || [];
   }
 }
 
