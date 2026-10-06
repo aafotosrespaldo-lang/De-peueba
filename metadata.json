@@ -1,0 +1,6 @@
+{
+  "name": "Directaurante POS Core",
+  "description": "Plataforma modular para restaurantes con POS Core v0.1, gestión de mesas, comensales y subcuentas, KDS, eventos y arquitectura de plugins.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
